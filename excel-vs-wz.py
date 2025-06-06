@@ -151,6 +151,7 @@ if extension == "pdf":
                 - właściwą kolumnę EAN (przez synonimy w synonyms_ean_wz)
                 - właściwą kolumnę Ilość (przez synonimy w synonyms_qty_wz),
                   albo jeśli jej nie ma – rozbije po 'Termin ważności Ilo' + 'ść Waga brutto'.
+                Pominie każdy wiersz, gdzie ean != 13 cyfr.
                 """
                 cols = list(df_table.columns)
 
@@ -176,7 +177,8 @@ if extension == "pdf":
                     # Mamy bezpośrednią kolumnę „Ilość”
                     for _, row in df_table.iterrows():
                         raw_ean = str(row[col_ean]).strip()
-                        if raw_ean == "" or pd.isna(raw_ean):
+                        if not re.fullmatch(r"\d{13}", raw_ean.split()[-1] if raw_ean else ""):
+                            # jeśli nie 13 cyfr, pomiń
                             continue
                         ean = raw_ean.split()[-1]
 
@@ -202,7 +204,7 @@ if extension == "pdf":
 
                     for _, row in df_table.iterrows():
                         raw_ean = str(row[col_ean]).strip()
-                        if raw_ean == "" or pd.isna(raw_ean):
+                        if not re.fullmatch(r"\d{13}", raw_ean.split()[-1] if raw_ean else ""):
                             continue
                         ean = raw_ean.split()[-1]
 
@@ -292,10 +294,13 @@ else:
         )
         st.stop()
 
+    # Dodatkowo sprawdźmy, czy kolumna EAN zawiera realne 13 cyfr. Jeżeli nie, pominąć taki wiersz.
+    tmp_sym = df_wz_raw[col_ean_wz].astype(str).str.strip().str.split().str[-1]
+    mask_valid_ean = tmp_sym.str.fullmatch(r"\d{13}")
     df_wz = pd.DataFrame({
-        "Symbol": df_wz_raw[col_ean_wz].astype(str).str.strip().str.replace(r"\.0+$", "", regex=True),
+        "Symbol": tmp_sym[mask_valid_ean],
         "Ilość_WZ": pd.to_numeric(
-            df_wz_raw[col_qty_wz].astype(str)
+            df_wz_raw.loc[mask_valid_ean, col_qty_wz].astype(str)
             .str.replace(",", ".")
             .str.replace(r"\s+", "", regex=True),
             errors="coerce"
@@ -385,7 +390,7 @@ st.download_button(
 )
 
 # =============================================================================
-# 7) Komunikat końcowy, kolorowany na podstawie tego, czy wszystkie pozycje są OK
+# 7) Komunikat końcowy, kolorowany według statusu
 # =============================================================================
 all_ok = (df_compare["Status"] == "OK").all()
 
