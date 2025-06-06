@@ -14,24 +14,26 @@ st.title("📋 Porównywarka Zamówienie (Excel) vs. WZ (PDF lub Excel)")
 st.markdown(
     """
     **Instrukcja:**
-    1. Wgraj plik Excel z zamówieniem, zawierający kolumny:
-       - `Symbol` (EAN, 13 cyfr),
-       - `Ilość` (liczba zamawianych sztuk).
-    2. Wgraj plik WZ w formacie **PDF** (lub gotowy Excel z WZ), zawierający:
-       - `Kod produktu` (EAN),
+    1. Wgraj Excel z zamówieniem, zawierający kolumny:
+       - `Symbol` (EAN, 13 cyfr)
+       - `Ilość` (liczba sztuk)
+    2. Wgraj WZ w formie **PDF** (lub Excel), zawierający:
+       - `Kod produktu` (EAN)
        - `Ilość` (wydane sztuki)
        LUB w PDF-ie:
-       - rozbitą na dwie kolumny `Termin ważności Ilo` (część całkowita) i `ść Waga brutto` (część dziesiętna).
+       - `Termin ważności Ilo` (część całkowita)
+       - `ść Waga brutto`  (część dziesiętna)
     3. Aplikacja:
-       - wypakuje wszystkie strony PDF (ręcznie z pierwszej strony, przez regex, a z kolejnych przez `extract_tables`),  
-       - odtworzy kolumnę `Ilość`,  
+       - z pierwszej strony PDF „ręcznie” wyciągnie z każdej linii EAN + ilość (regex),
+       - z kolejnych stron użyje `extract_tables()` (jeśli znajdzie prawidłową tabelę),
+       - odbuduje kolumnę `Ilość_WZ`,
        - zsumuje po EAN-ach i porówna z zamówieniem.
     """
 )
 
-# =====================================
-# SIDEBAR: Upload plików
-# =====================================
+# ==============================
+# 1) Sidebar: upload plików
+# ==============================
 st.sidebar.header("Krok 1: Wgraj plik ZAMÓWIENIE (Excel)")
 uploaded_order = st.sidebar.file_uploader(
     label="Wybierz plik Excel (zamówienie)",
@@ -48,20 +50,20 @@ uploaded_wz = st.sidebar.file_uploader(
 
 st.sidebar.markdown(
     """
-    - Jeśli wgrasz **PDF**, aplikacja:
-      • z pierwszej strony ręcznie wyciągnie EAN + ilość przez regex,  
-      • z kolejnych stron użyje `extract_tables()`.  
-    - Jeśli wgrasz **Excel** (WZ→.xlsx), wczyta `Kod produktu` + `Ilość` bezpośrednio.
+    - Dla **PDF**:  
+      • z pierwszej strony – linia po linii (regex EAN + ilość),  
+      • z kolejnych – `extract_tables()`.  
+    - Dla **Excel** (WZ→.xlsx): od razu weź `Kod produktu` + `Ilość`.
     """
 )
 
 if uploaded_order is None or uploaded_wz is None:
-    st.info("Proszę wgrać oba pliki: Excel z zamówieniem i PDF/Excel z WZ.")
+    st.info("Proszę wgrać oba pliki: Excel (zamówienie) oraz PDF/Excel (WZ).")
     st.stop()
 
-# =====================================
-# 1) Wczytanie i przygotowanie Excela z ZAMÓWIENIEM
-# =====================================
+# ==============================
+# 2) Wczytanie Excel z zamówieniem
+# ==============================
 try:
     df_order = pd.read_excel(uploaded_order, dtype={"Symbol": str})
 except Exception as e:
@@ -70,24 +72,23 @@ except Exception as e:
 
 if "Symbol" not in df_order.columns or "Ilość" not in df_order.columns:
     st.error(
-        "Plik ZAMÓWIENIE musi mieć kolumny:\n"
+        "Excel (zamówienie) musi mieć kolumny:\n"
         "- `Symbol` (EAN)\n"
         "- `Ilość` (liczba sztuk)\n\n"
-        "Sprawdź, czy nagłówki precyzyjnie się zgadzają."
+        "Sprawdź dokładnie nazwy nagłówków."
     )
     st.stop()
 
 df_order["Symbol"] = (
-    df_order["Symbol"]
-    .astype(str)
+    df_order["Symbol"].astype(str)
     .str.strip()
     .str.replace(r"\.0+$", "", regex=True)
 )
 df_order["Ilość"] = pd.to_numeric(df_order["Ilość"], errors="coerce").fillna(0)
 
-# =====================================
-# 2) Wczytanie i przygotowanie danych z WZ (PDF lub Excel)
-# =====================================
+# ==============================
+# 3) Wczytanie WZ (PDF lub Excel)
+# ==============================
 file_ext = uploaded_wz.name.lower().rsplit(".", maxsplit=1)[-1]
 
 if file_ext == "pdf":
@@ -101,28 +102,27 @@ if file_ext == "pdf":
 
             for page_idx, page in enumerate(pdf.pages):
                 if page_idx == 0:
-                    # ręczne wyciąganie z pierwszej strony:
+                    # 3.1) Pierwsza strona → linia po linii: EAN + ilość
                     text = page.extract_text() or ""
-                    # znajdź wszystkie 13-cyfrowe EAN-y oraz liczby "xxx,xx"
-                    eans = re.findall(r"\b(\d{13})\b", text)
-                    qtys = re.findall(r"\b(\d{1,4},\d{2})\b", text)
-                    # jeśli lista qtys krótsza od listy eans, dopasuj przez len=min
-                    n = min(len(eans), len(qtys))
+                    lines = text.split("\n")
                     manual_rows = []
-                    for i in range(n):
-                        ean = eans[i]
-                        qty_str = qtys[i].replace(",", ".")
-                        try:
-                            qty = float(qty_str)
-                        except:
-                            qty = 0.0
-                        manual_rows.append([ean, qty])
+                    for line in lines:
+                        ean_match = re.search(r"\b(\d{13})\b", line)
+                        qty_match = re.search(r"(\d{1,4},\d{2})", line)
+                        if ean_match and qty_match:
+                            ean = ean_match.group(1)
+                            qty_str = qty_match.group(1).replace(",", ".")
+                            try:
+                                qty = float(qty_str)
+                            except:
+                                qty = 0.0
+                            manual_rows.append([ean, qty])
                     if manual_rows:
                         df_manual = pd.DataFrame(manual_rows, columns=["Symbol", "Ilość_WZ"])
                         all_tables.append(df_manual)
 
                 else:
-                    # kolejne strony: extract_tables()
+                    # 3.2) Kolejne strony → extract_tables()
                     tables_on_page = page.extract_tables()
                     added = False
                     for table in tables_on_page:
@@ -131,6 +131,7 @@ if file_ext == "pdf":
                             if is_valid_wz_table(df_page):
                                 all_tables.append(df_page)
                                 added = True
+                    # fallback, gdy extract_tables nie znalazł niczego odpowiedniego
                     if not added:
                         single = page.extract_table()
                         if single and len(single) > 1:
@@ -138,19 +139,21 @@ if file_ext == "pdf":
                             if is_valid_wz_table(df_single):
                                 all_tables.append(df_single)
     except Exception as e:
-        st.error(f"Nie udało się przeczytać PDF-a przez pdfplumber:\n```{e}```")
+        st.error(f"Nie udało się przeczytać PDF przez pdfplumber:\n```{e}```")
         st.stop()
 
     if len(all_tables) == 0:
-        st.error("Nie znaleziono żadnej użytecznej tabeli w PDF WZ.")
+        st.error("Nie znaleziono żadnych danych w PDF WZ.")
         st.stop()
 
+    # Scal wszystkie fragmenty w jedno
     df_wz_raw = pd.concat(all_tables, ignore_index=True)
     cols = list(df_wz_raw.columns)
 
-    # Wariant A: bezpośrednia kolumna "Ilość"
+    # 3.3) Detekcja układu kolumn
     ilo_exists = next((col for col in cols if col.lower().strip() == "ilość"), None)
     if ilo_exists is not None:
+        # 3.3.A) Zwykła kolumna „Ilość”
         col_qty = ilo_exists
         col_ean = next((col for col in cols if "kod" in col.lower() and "produkt" in col.lower()), None)
         if col_ean is None:
@@ -172,15 +175,16 @@ if file_ext == "pdf":
         df_wz["Ilość_WZ"] = pd.to_numeric(df_wz["Ilość_WZ"], errors="coerce").fillna(0)
 
     else:
-        # Wariant B: rozbita kolumna ilości
+        # 3.3.B) Rozbita kolumna „Ilość” → „Termin ważności Ilo” + „ść Waga brutto”
         col_part_int = next((col for col in cols if "termin" in col.lower() and "ilo" in col.lower()), None)
         col_part_dec = next((col for col in cols if "waga" in col.lower()), None)
         col_ean = next((col for col in cols if "kod" in col.lower() and "produkt" in col.lower()), None)
 
         if col_part_int is None or col_part_dec is None or col_ean is None:
             st.error(
-                "Brak wymaganych kolumn w rozbitym układzie.\n"
-                f"Znalezione nagłówki: {cols}"
+                "Brak kolumn w rozbitym układzie WZ (PDF).\n"
+                f"Znalezione nagłówki: {cols}\n"
+                "Spodziewane: 'Kod produktu', 'Termin ważności Ilo', 'ść Waga brutto'."
             )
             st.stop()
 
@@ -217,7 +221,7 @@ if file_ext == "pdf":
         })
 
 else:
-    # wczytanie gotowego Excela z WZ
+    # 3.4) Wczytanie gotowego Excela z WZ
     try:
         df_wz_raw = pd.read_excel(uploaded_wz, dtype={"Kod produktu": str})
     except Exception as e:
@@ -226,9 +230,9 @@ else:
 
     if "Kod produktu" not in df_wz_raw.columns or "Ilość" not in df_wz_raw.columns:
         st.error(
-            "Plik WZ (Excel) musi mieć kolumny:\n"
+            "Excel (WZ) musi mieć kolumny:\n"
             "- `Kod produktu` (EAN)\n"
-            "- `Ilość` (liczba sztuk)\n\n"
+            "- `Ilość` (wydane sztuki)\n\n"
             f"Znalezione nagłówki: {list(df_wz_raw.columns)}"
         )
         st.stop()
@@ -246,9 +250,9 @@ else:
     )
     df_wz["Ilość_WZ"] = pd.to_numeric(df_wz["Ilość_WZ"], errors="coerce").fillna(0)
 
-# =====================================
-# 3) Grupowanie po EAN (Symbol) i sumowanie ilości
-# =====================================
+# ==============================
+# 4) Grupowanie i sumowanie
+# ==============================
 df_order_grouped = (
     df_order
     .groupby("Symbol", as_index=False)
@@ -263,9 +267,9 @@ df_wz_grouped = (
     .rename(columns={"Ilość_WZ": "Wydana_ilość"})
 )
 
-# =====================================
-# 4) Scalanie (merge) i obliczenie różnic
-# =====================================
+# ==============================
+# 5) Merge i kolumna Status
+# ==============================
 df_compare = pd.merge(
     df_order_grouped,
     df_wz_grouped,
@@ -296,9 +300,9 @@ df_compare["Status"] = pd.Categorical(
 )
 df_compare = df_compare.sort_values(["Status", "Symbol"])
 
-# =====================================
-# 5) Wyświetlenie wyniku i przycisk do pobrania raportu
-# =====================================
+# ==============================
+# 6) Wyświetlenie i eksport
+# ==============================
 st.markdown("### 📊 Wynik porównania")
 st.dataframe(
     df_compare.style.format({
