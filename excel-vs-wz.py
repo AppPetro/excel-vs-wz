@@ -14,25 +14,20 @@ st.title("📋 Porównywarka Zamówienie (Excel) vs. WZ (PDF lub Excel)")
 st.markdown(
     """
     **Instrukcja:**
-    1. Wgraj Excel z zamówieniem, zawierający kolumny:
-       - `Symbol` (EAN, 13 cyfr)
-       - `Ilość` (liczba sztuk)
-    2. Wgraj WZ w formie **PDF** (lub Excel), zawierający:
-       - `Kod produktu` (EAN)
-       - `Ilość` (wydane sztuki)
-       LUB w PDF-ie:
-       - `Termin ważności Ilo` (część całkowita + data)
-       - `ść Waga brutto`  (część dziesiętna + waga)
+    1. Wgraj Excel z zamówieniem, zawierający kolumny z nazwami EAN i ilości (mogą to być synonimy):
+       - EAN: `Symbol`, `symbol`, `kod ean`, `kod_ean`, `ean`, `kod produktu`, `kod_produktu`
+       - Ilość: `Ilość`, `Ilosc`, `ilosc`, `Quantity`, `quantity`, `Qty`, `qty`, `sztuki`, `sztuka`
+    2. Wgraj WZ w formie **PDF** (lub Excel), gdzie kolumna EAN może się nazywać:
+       - `Kod produktu`, `kod produktu`, `kod_produktu`, `EAN`, `ean`, `symbol`
+       - Kolumna ilości może się nazywać: `Ilość`, `Ilosc`, `ilosc`, `Quantity`, `quantity`, `Qty`, `qty`
     3. Aplikacja:
-       - wyciągnie **wszystkie** strony PDF przez `extract_tables()`,
-       - z każdej tabeli odczyta EAN + Ilość (do prostych wierszy lub rozbitych kolumn),
-       - zsumuje po EAN-ach, stworzy tabelę porównawczą i pozwoli pobrać raport.
+       - zidentyfikuje właściwe kolumny dzięki synonimom,
+       - z PDF → każdej stronie wyciągnie tabelę przez `extract_tables()` i „napasuje” kolumny EAN + Ilość (lub odtworzy rozbitą ilość),
+       - zsumuje po EAN-ach i porówna z zamówieniem.
     """
 )
 
-# ==============================
-# 1) Sidebar: Wgrywanie plików
-# ==============================
+# === 1) Sidebar: przeładuj pliki
 st.sidebar.header("Krok 1: Wgraj plik ZAMÓWIENIE (Excel)")
 uploaded_order = st.sidebar.file_uploader(
     label="Wybierz plik Excel (zamówienie)",
@@ -49,10 +44,10 @@ uploaded_wz = st.sidebar.file_uploader(
 
 st.sidebar.markdown(
     """
-    - Dla **PDF**: użyjemy `pdfplumber.extract_tables()` na każdej stronie i 
-      zawsze wykonamy spójne parsowanie EAN + Ilość,  
-      bez rozbijania osobno pierwszej strony.  
-    - Dla **Excel (WZ→.xlsx)**: wczytamy bezpośrednio kolumny `Kod produktu` + `Ilość`.
+    - Dla **PDF**: parsujemy **wszystkie strony** przez `extract_tables()`,  
+      rozpoznając synonimy kolumn EAN i ilości,  
+      a gdy brak „Ilość” → składamy z „Termin ważności Ilo” + „ść Waga brutto”.  
+    - Dla **Excel (WZ→.xlsx)**: wczytujemy bezpośrednio kolumny `Kod produktu` (synonimy) + `Ilość` (synonimy).
     """
 )
 
@@ -60,65 +55,113 @@ if uploaded_order is None or uploaded_wz is None:
     st.info("Proszę wgrać oba pliki: Excel (zamówienie) oraz PDF/Excel (WZ).")
     st.stop()
 
-# ==============================
-# 2) Wczytanie Excel z zamówieniem
-# ==============================
+# === 2) Wczytanie Excel z zamówieniem (synonimy kolumn)
 try:
-    df_order = pd.read_excel(uploaded_order, dtype={"Symbol": str})
+    df_order_raw = pd.read_excel(uploaded_order, dtype=str)
 except Exception as e:
     st.error(f"Nie udało się wczytać pliku zamówienia:\n```{e}```")
     st.stop()
 
-# Sprawdzenie poprawności nagłówków
-if "Symbol" not in df_order.columns or "Ilość" not in df_order.columns:
+# Zbiór synonimów dla kolumny EAN w zamówieniu
+synonyms_ean_order = {
+    col.lower().replace(" ", "").replace("_", ""): col
+    for col in ["Symbol", "symbol", "kod ean", "kod_ean", "ean", "kod produktu", "kod_produktu"]
+}
+# Zbiór synonimów dla kolumny Ilość w zamówieniu
+synonyms_qty_order = {
+    col.lower().replace(" ", "").replace("_", ""): col
+    for col in ["Ilość", "Ilosc", "ilosc", "Quantity", "quantity", "Qty", "qty", "sztuki", "sztuka"]
+}
+
+# Funkcja pomocnicza: znajdź faktyczną nazwę kolumny w DataFrame, biorąc pod uwagę synonimy
+def find_column_by_synonyms(df: pd.DataFrame, synonyms: dict):
+    """
+    Przyjmuje df oraz słownik {klucz_synonimu: nazwa_do_zwrotu}.
+    W kluczu_synonimu spodziewamy się np. 'symbol' (bo usuwamy spacje i zamieniamy na małe litery).
+    Jeśli df.columns zawiera którąś z wartości (po przetworzeniu na małe litery, bez spacji/underscore),
+    zwracamy oryginalną nazwę kolumny (ze df), w przeciwnym razie None.
+    """
+    for raw_col in df.columns:
+        key = raw_col.lower().replace(" ", "").replace("_", "")
+        if key in synonyms:
+            return raw_col
+    return None
+
+# Znajdź kolumny w df_order_raw
+col_ean_order = find_column_by_synonyms(df_order_raw, synonyms_ean_order)
+col_qty_order = find_column_by_synonyms(df_order_raw, synonyms_qty_order)
+
+if col_ean_order is None or col_qty_order is None:
     st.error(
-        "Excel z zamówieniem musi mieć kolumny:\n"
-        "- `Symbol` (EAN, 13 cyfr)\n"
-        "- `Ilość` (liczba sztuk)\n\n"
-        "Proszę sprawdzić dokładne nazwy nagłówków."
+        "Plik zamówienia musi zawierać kolumnę z EAN-em (np. `Symbol`, `kod ean`, `ean`) "
+        "oraz kolumnę z ilością (np. `Ilość`, `quantity`, `qty`, `sztuki`).\n"
+        f"Znalezione nagłówki: {list(df_order_raw.columns)}"
     )
     st.stop()
 
-# Oczyszczenie EAN i konwersja ilości na numeric
+# Oczyść i przekonwertuj wartości
+df_order = pd.DataFrame()
 df_order["Symbol"] = (
-    df_order["Symbol"]
-    .astype(str)
+    df_order_raw[col_ean_order].astype(str)
     .str.strip()
     .str.replace(r"\.0+$", "", regex=True)
 )
-df_order["Ilość"] = pd.to_numeric(df_order["Ilość"], errors="coerce").fillna(0)
+df_order["Ilość"] = pd.to_numeric(df_order_raw[col_qty_order], errors="coerce").fillna(0)
 
-# ==============================
-# 3) Wczytanie WZ (PDF lub Excel)
-# ==============================
+# === 3) Wczytanie WZ (PDF lub Excel), z synonimami kolumn
 extension = uploaded_wz.name.lower().rsplit(".", maxsplit=1)[-1]
 
 if extension == "pdf":
     try:
         with pdfplumber.open(uploaded_wz) as pdf:
-            # Lista tupli (EAN, ilość) z każdej strony
             wz_rows = []
 
-            # Funkcja pomocnicza do parsowania pojedynczej tabeli w postaci DataFrame
+            # Synonimy dla kolumny EAN w WZ
+            synonyms_ean_wz = {
+                col.lower().replace(" ", "").replace("_", ""): col
+                for col in ["Kod produktu", "kod produktu", "kod_produktu", "EAN", "ean", "symbol"]
+            }
+            # Synonimy dla kolumny Ilość w WZ (bez rozbicia)
+            synonyms_qty_wz = {
+                col.lower().replace(" ", "").replace("_", ""): col
+                for col in ["Ilość", "Ilosc", "ilosc", "Quantity", "quantity", "Qty", "qty"]
+            }
+
             def parse_wz_table(df_table: pd.DataFrame):
                 """
-                Sprawdza nagłówki: 
-                - jeśli jest kolumna "Ilość" → bierze ją bezpośrednio,
-                - inaczej zakłada, że kolumny to 'Termin ważności Ilo' + 'ść Waga brutto'.
-                Zwraca listę [ [ean, qty], ... ].
+                Zidentyfikuje w df_table:
+                - właściwą kolumnę EAN (przez synonimy w synonyms_ean_wz)
+                - właściwą kolumnę Ilość (przez synonimy w synonyms_qty_wz),
+                  albo jeśli jej nie ma – rozbije po 'Termin ważności Ilo' + 'ść Waga brutto'.
                 """
-                cols = [c.strip() for c in df_table.columns]
+                cols = list(df_table.columns)
 
-                # SPRóbuj znaleźć bezpośrednią kolumnę "Ilość"
-                col_qty = next((c for c in cols if c.lower() == "ilość"), None)
-                col_ean = next((c for c in cols if "kod" in c.lower() and "produkt" in c.lower()), None)
+                # Znajdź kolumnę EAN
+                col_ean = None
+                for raw_col in cols:
+                    key = raw_col.lower().replace(" ", "").replace("_", "")
+                    if key in synonyms_ean_wz:
+                        col_ean = raw_col
+                        break
 
-                if col_qty and col_ean:
+                if col_ean is None:
+                    # Bez EAN-u nic nie zrobimy
+                    return
+
+                # Znajdź „prostą” kolumnę Ilość
+                col_qty = None
+                for raw_col in cols:
+                    key = raw_col.lower().replace(" ", "").replace("_", "")
+                    if key in synonyms_qty_wz:
+                        col_qty = raw_col
+                        break
+
+                if col_qty:
+                    # Mamy bezpośrednią kolumnę „Ilość”
                     for _, row in df_table.iterrows():
                         raw_ean = str(row[col_ean]).strip()
                         if raw_ean == "" or pd.isna(raw_ean):
                             continue
-                        # Weź ostatni token EAN (czasem występuje prefiks "1 425023...")
                         ean = raw_ean.split()[-1]
 
                         raw_qty = str(row[col_qty]).strip().replace(",", ".").replace(" ", "")
@@ -129,12 +172,17 @@ if extension == "pdf":
                         wz_rows.append([ean, qty])
 
                 else:
-                    # Rozbita kolumna: 'Termin ważności Ilo' (data + część całk.) oraz 'ść Waga brutto' (część dzies.)
-                    col_part_int = next((c for c in cols if "termin" in c.lower() and "ilo" in c.lower()), None)
-                    col_part_dec = next((c for c in cols if "waga" in c.lower()), None)
-
-                    if col_part_int is None or col_part_dec is None or col_ean is None:
-                        # Niepoprawne nagłówki, ignorujemy tabelę
+                    # Wariant: kolumna rozbita na „Termin ważności Ilo” + „ść Waga brutto”
+                    # Znajdź je po frazach
+                    col_part_int = next(
+                        (c for c in cols if "termin" in c.lower() and "ilo" in c.lower()),
+                        None
+                    )
+                    col_part_dec = next(
+                        (c for c in cols if "waga" in c.lower()),
+                        None
+                    )
+                    if col_part_int is None or col_part_dec is None:
                         return
 
                     for _, row in df_table.iterrows():
@@ -143,7 +191,7 @@ if extension == "pdf":
                             continue
                         ean = raw_ean.split()[-1]
 
-                        # Część całkowita: np. "2027-11-27 60," → "60"
+                        # Część całkowita
                         part_int_cell = str(row[col_part_int]).strip()
                         tokens_int = part_int_cell.split()
                         if len(tokens_int) >= 2:
@@ -151,12 +199,11 @@ if extension == "pdf":
                         else:
                             raw_int = "0"
 
-                        # Część dziesiętna: np. "00 15,00" → weź "00"
+                        # Część dziesiętna
                         part_dec_cell = str(row[col_part_dec]).strip()
                         tokens_dec = part_dec_cell.split()
                         dec_part = tokens_dec[0].replace(".", "").strip() if tokens_dec else "00"
 
-                        # Scal w "60,00"
                         if dec_part.startswith(","):
                             qty_str = f"{raw_int}{dec_part}"
                         else:
@@ -165,57 +212,73 @@ if extension == "pdf":
                             qty = float(qty_str.replace(",", "."))
                         except:
                             qty = 0.0
-
                         wz_rows.append([ean, qty])
 
-            # Przechodzimy przez wszystkie strony PDF
+            # Przetwarzaj każdą stronę PDF
             for page in pdf.pages:
-                # extract_tables() → lista wszystkich tabel na stronie
                 tables = page.extract_tables()
                 for table in tables:
                     if table and len(table) > 1:
-                        # Konwertuj listę list na DataFrame
                         df_page = pd.DataFrame(table[1:], columns=table[0])
                         parse_wz_table(df_page)
 
     except Exception as e:
-        st.error(f"Nie udało się wczytać PDF-a przez pdfplumber:\n```{e}```")
+        st.error(f"Nie udało się przeczytać PDF przez pdfplumber:\n```{e}```")
         st.stop()
 
     if not wz_rows:
-        st.error("Nie znaleziono żadnej tabeli WZ w PDF-ie.")
+        st.error("Nie znaleziono żadnych danych w PDF WZ.")
         st.stop()
 
-    # Przemień listę [ [ean, qty], ... ] w DataFrame i zsumuj po EAN
+    # Przekształć listę w DataFrame i zsumuj
     df_wz = pd.DataFrame(wz_rows, columns=["Symbol", "Ilość_WZ"])
     df_wz["Symbol"] = df_wz["Symbol"].astype(str).str.strip()
     df_wz["Ilość_WZ"] = pd.to_numeric(df_wz["Ilość_WZ"], errors="coerce").fillna(0)
 
 else:
-    # Jeżeli użytkownik wgrał gotowy Excel z WZ
+    # Jeżeli wgrano Excel z WZ
     try:
-        df_wz_raw = pd.read_excel(uploaded_wz, dtype={"Kod produktu": str})
+        df_wz_raw = pd.read_excel(uploaded_wz, dtype=str)
     except Exception as e:
         st.error(f"Nie udało się wczytać Excela WZ:\n```{e}```")
         st.stop()
 
-    if "Kod produktu" not in df_wz_raw.columns or "Ilość" not in df_wz_raw.columns:
+    # Znajdź kolumnę EAN w WZ (synonimy)
+    synonyms_ean_wz = {
+        col.lower().replace(" ", "").replace("_", ""): col
+        for col in ["Kod produktu", "kod produktu", "kod_produktu", "EAN", "ean", "symbol"]
+    }
+    col_ean_wz = None
+    for raw_col in df_wz_raw.columns:
+        key = raw_col.lower().replace(" ", "").replace("_", "")
+        if key in synonyms_ean_wz:
+            col_ean_wz = raw_col
+            break
+
+    # Znajdź kolumnę Ilość w WZ (synonimy)
+    synonyms_qty_wz = {
+        col.lower().replace(" ", "").replace("_", ""): col
+        for col in ["Ilość", "Ilosc", "ilosc", "Quantity", "quantity", "Qty", "qty"]
+    }
+    col_qty_wz = None
+    for raw_col in df_wz_raw.columns:
+        key = raw_col.lower().replace(" ", "").replace("_", "")
+        if key in synonyms_qty_wz:
+            col_qty_wz = raw_col
+            break
+
+    if col_ean_wz is None or col_qty_wz is None:
         st.error(
-            "Excel WZ musi mieć kolumny:\n"
-            "- `Kod produktu` (EAN)\n"
-            "- `Ilość` (wydane sztuki)\n\n"
+            "Excel WZ musi zawierać kolumnę z EAN-em (np. `Kod produktu`, `EAN`, `symbol`) "
+            "oraz kolumnę z ilością (np. `Ilość`, `quantity`, `qty`).\n"
             f"Znalezione nagłówki: {list(df_wz_raw.columns)}"
         )
         st.stop()
 
-    df_wz = df_wz_raw.rename(columns={"Kod produktu": "Symbol", "Ilość": "Ilość_WZ"})
-    df_wz["Symbol"] = df_wz["Symbol"].astype(str).str.strip().str.replace(r"\.0+$", "", regex=True)
-    df_wz["Ilość_WZ"] = (
-        df_wz["Ilość_WZ"].astype(str)
-        .str.replace(",", ".", regex=False)
-        .str.replace(r"\s+", "", regex=True)
-    )
-    df_wz["Ilość_WZ"] = pd.to_numeric(df_wz["Ilość_WZ"], errors="coerce").fillna(0)
+    df_wz = pd.DataFrame({
+        "Symbol": df_wz_raw[col_ean_wz].astype(str).str.strip().str.replace(r"\.0+$", "", regex=True),
+        "Ilość_WZ": pd.to_numeric(df_wz_raw[col_qty_wz].astype(str).str.replace(",", ".").str.replace(r"\s+", "", regex=True), errors="coerce").fillna(0)
+    })
 
 # ==============================
 # 4) Grupowanie i sumowanie
@@ -235,7 +298,7 @@ df_wz_grouped = (
 )
 
 # ==============================
-# 5) Merge + Status + Różnica
+# 5) Merge + status + różnica
 # ==============================
 df_compare = pd.merge(
     df_order_grouped,
@@ -261,7 +324,6 @@ def status_row(row):
 
 df_compare["Status"] = df_compare.apply(status_row, axis=1)
 
-# Posortuj w kolejności: różni się, brak we WZ, brak w zamówieniu, OK
 order_status = ["Różni się", "Brak we WZ", "Brak w zamówieniu", "OK"]
 df_compare["Status"] = pd.Categorical(df_compare["Status"], categories=order_status, ordered=True)
 df_compare = df_compare.sort_values(["Status", "Symbol"])
