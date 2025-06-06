@@ -14,22 +14,19 @@ st.title("📋 Porównywarka Zamówienie (Excel) vs. WZ (PDF lub Excel)")
 st.markdown(
     """
     **Instrukcja:**
-    1. Wgraj plik Excel z zamówieniem, zawierający przynajmniej kolumny:
-       - `Symbol` (EAN, np. 5029040012288)
-       - `Ilość` (liczba zamawianych sztuk)
-    2. Wgraj plik WZ w formacie **PDF** (lub, jeśli wolisz, gotowy Excel z WZ), 
-       zawierający przynajmniej kolumny:
-       - `Kod produktu` (EAN)
-       - `Ilość` (liczba wydanych sztuk w danym wierszu WZ)
-       LUB, w przypadku PDF-ów, tabelę rozbitą na dwie kolumny:
-       - `Termin ważności Ilo` (zawiera część całkowitą ilości po dacie)
-       - `ść Waga brutto` (zawiera część dziesiętną ilości i wagę brutto)
-    3. Aplikacja automatycznie:
-       - wyciągnie wszystkie tabele z PDF-a (ze wszystkich stron) za pomocą `pdfplumber.extract_tables()`,
-       - wykryje, czy kolumna „Ilość” jest zapisana wprost, czy rozbita na dwa pola,
-       - poprawnie odtworzy wartość „Ilość”,
-       - zsumuje ilości po EAN-ach,
-       - porówna z zamówieniem i wygeneruje raport z różnicą.
+    1. Wgraj plik Excel z zamówieniem, zawierający kolumny:
+       - `Symbol` (EAN, 13 cyfr),
+       - `Ilość` (liczba zamawianych sztuk).
+    2. Wgraj plik WZ w formacie **PDF** (lub gotowy Excel z WZ), zawierający:
+       - `Kod produktu` (EAN),
+       - `Ilość` (wydane sztuki)
+       LUB w PDF-ie:
+       - rozbitą na dwie kolumny `Termin ważności Ilo` (część całkowita) i `ść Waga brutto` (część dziesiętna).
+    3. Aplikacja:
+       - wypakuje wszystkie strony PDF (`extract_tables` dla stron 2+),
+       - dla pierwszej strony wymusi manualne wyciąganie tekstu i regex `EAN + liczba`,  
+       - odtworzy kolumnę `Ilość`,
+       - zsumuje po EAN-ach i porówna z zamówieniem.
     """
 )
 
@@ -52,14 +49,16 @@ uploaded_wz = st.sidebar.file_uploader(
 
 st.sidebar.markdown(
     """
-    - Jeśli wgrasz **PDF**, aplikacja użyje `pdfplumber` do wyciągnięcia WSZYSTKICH tabel z każdej strony, 
-      a następnie zbuduje poprawną kolumnę `Ilość` (albo wprost, albo z pól `Termin ważności Ilo` + `ść Waga brutto`).  
-    - Jeśli wgrasz **Excel** (plik wyeksportowany z WZ→.xlsx), aplikacja wczyta kolumny `Kod produktu` i `Ilość` bezpośrednio.
+    - Jeśli wgrasz **PDF**, aplikacja wyciągnie:  
+      • pierwszą stronę ręcznie (tekst + regex),  
+      • kolejne strony przez `extract_tables()`,  
+      a następnie połączy wyniki.  
+    - Jeśli wgrasz **Excel** (WZ→.xlsx), wczyta `Kod produktu` i `Ilość` bezpośrednio.
     """
 )
 
 if uploaded_order is None or uploaded_wz is None:
-    st.info("Proszę najpierw wgrać oba pliki: Excel z zamówieniem oraz PDF/Excel z WZ.")
+    st.info("Proszę wgrać oba pliki: Excel z zamówieniem i PDF/Excel z WZ.") 
     st.stop()
 
 # =====================================
@@ -75,14 +74,13 @@ if "Symbol" not in df_order.columns or "Ilość" not in df_order.columns:
     st.error(
         "Plik ZAMÓWIENIE musi mieć kolumny:\n"
         "- `Symbol` (EAN)\n"
-        "- `Ilość` (liczba zamawianych sztuk)\n\n"
-        "Sprawdź, czy nagłówki dokładnie tak się nazywają (wielkość liter i spacje)."
+        "- `Ilość` (liczba sztuk)\n\n"
+        "Sprawdź, czy nagłówki precyzyjnie się zgadzają."
     )
     st.stop()
 
 df_order["Symbol"] = (
-    df_order["Symbol"]
-    .astype(str)
+    df_order["Symbol"].astype(str)
     .str.strip()
     .str.replace(r"\.0+$", "", regex=True)
 )
@@ -102,33 +100,14 @@ if file_ext == "pdf":
                 cols = [str(c).lower().strip() for c in df.columns]
                 return any("kod" in c and "produkt" in c for c in cols) or any(c == "ilość" for c in cols)
 
-            for page in pdf.pages:
-                # 1) extract_tables() → lista wszystkich wykrytych tabel na stronie
-                tables_on_page = page.extract_tables()
-                added = False
-
-                for table in tables_on_page:
-                    if table and len(table) > 1:
-                        df_page = pd.DataFrame(table[1:], columns=table[0])
-                        if is_valid_wz_table(df_page):
-                            all_tables.append(df_page)
-                            added = True
-
-                # 2) fallback: extract_table() (jedna pierwsza tabela)
-                if not added:
-                    single = page.extract_table()
-                    if single and len(single) > 1:
-                        df_single = pd.DataFrame(single[1:], columns=single[0])
-                        if is_valid_wz_table(df_single):
-                            all_tables.append(df_single)
-                            added = True
-
-                # 3) fallback: manualna ekstrakcja tekstu (regexem EAN + ilość)
-                if not added:
+            for page_idx, page in enumerate(pdf.pages):
+                if page_idx == 0:
+                    # Ręczne wyciąganie z pierwszej strony: tekst + regex EAN + ilość
                     text = page.extract_text() or ""
                     lines = text.split("\n")
                     manual_rows = []
                     for line in lines:
+                        # Szukamy 13-cyfrowego EAN i liczby typu "xxx,xx"
                         ean_match = re.search(r"\b(\d{13})\b", line)
                         qty_match = re.search(r"(\d{1,4},\d{2})", line)
                         if ean_match and qty_match:
@@ -143,36 +122,52 @@ if file_ext == "pdf":
                         df_manual = pd.DataFrame(manual_rows, columns=["Symbol", "Ilość_WZ"])
                         all_tables.append(df_manual)
 
+                else:
+                    # Kolejne strony: extract_tables() → sprawdzamy, czy tabela ma kolumny "kod produkt" lub "ilość"
+                    tables_on_page = page.extract_tables()
+                    added = False
+                    for table in tables_on_page:
+                        if table and len(table) > 1:
+                            df_page = pd.DataFrame(table[1:], columns=table[0])
+                            if is_valid_wz_table(df_page):
+                                all_tables.append(df_page)
+                                added = True
+
+                    # Fallback: extract_table()
+                    if not added:
+                        single = page.extract_table()
+                        if single and len(single) > 1:
+                            df_single = pd.DataFrame(single[1:], columns=single[0])
+                            if is_valid_wz_table(df_single):
+                                all_tables.append(df_single)
+
     except Exception as e:
         st.error(f"Nie udało się przeczytać PDF-a przez pdfplumber:\n```{e}```")
         st.stop()
 
     if len(all_tables) == 0:
-        st.error("Nie znaleziono żadnej użytecznej tabeli w pliku PDF WZ.")
+        st.error("Nie znaleziono żadnej istotnej tabeli w PDF WZ.")
         st.stop()
 
     df_wz_raw = pd.concat(all_tables, ignore_index=True)
     cols = list(df_wz_raw.columns)
 
-    # Wariant A: kolumna "Ilość" nazywa się wprost "Ilość"
+    # Wariant A: kolumna "Ilość" wprost
     ilo_exists = next((col for col in cols if col.lower().strip() == "ilość"), None)
     if ilo_exists is not None:
         col_qty = ilo_exists
         col_ean = next((col for col in cols if "kod" in col.lower() and "produkt" in col.lower()), None)
         if col_ean is None:
             st.error(
-                "Po scaleniu tabel z PDF nie znaleziono kolumny `Kod produktu`.\n"
+                "Po połączeniu tabel nie znaleziono `Kod produktu`.\n"
                 f"Znalezione nagłówki: {cols}"
             )
             st.stop()
 
-        # Wyciągnij tylko te dwie kolumny
         df_wz = pd.DataFrame({
             "Symbol": df_wz_raw[col_ean].astype(str).str.strip(),
             "Ilość_WZ": df_wz_raw[col_qty]
         })
-
-        # Oczyść EAN-y (jeżeli były "1  4250231536748", weź ostatni token)
         df_wz["Symbol"] = df_wz["Symbol"].apply(lambda x: str(x).split()[-1])
         df_wz["Ilość_WZ"] = (
             df_wz["Ilość_WZ"].astype(str)
@@ -182,17 +177,16 @@ if file_ext == "pdf":
         df_wz["Ilość_WZ"] = pd.to_numeric(df_wz["Ilość_WZ"], errors="coerce").fillna(0)
 
     else:
-        # Wariant B: "rozbita" kolumna ilości na "Termin ważności Ilo" (część całk.)
-        # i "ść Waga brutto" (część dzies.)
+        # Wariant B: rozbita "Ilość" na "Termin ważności Ilo" + "ść Waga brutto"
         col_part_int = next((col for col in cols if "termin" in col.lower() and "ilo" in col.lower()), None)
         col_part_dec = next((col for col in cols if "waga" in col.lower()), None)
         col_ean = next((col for col in cols if "kod" in col.lower() and "produkt" in col.lower()), None)
 
         if col_part_int is None or col_part_dec is None or col_ean is None:
             st.error(
-                "Nie udało się wykryć kolumn w rozbitym układzie tabeli WZ (PDF).\n"
-                "Spodziewane nagłówki: 'Kod produktu', 'Termin ważności Ilo', 'ść Waga brutto'.\n"
-                f"Znalezione nagłówki: {cols}"
+                "Brak wymaganych kolumn w rozbitym układzie pierwszej strony.\n"
+                f"Znalezione nagłówki: {cols}\n"
+                "Spodziewane: 'Kod produktu', 'Termin ważności Ilo', 'ść Waga brutto'."
             )
             st.stop()
 
@@ -202,26 +196,16 @@ if file_ext == "pdf":
             raw_ean_cell = str(row[col_ean]).strip()
             if raw_ean_cell == "" or pd.isna(raw_ean_cell):
                 continue
-            # Ostatni token to faktyczny EAN
             raw_ean = raw_ean_cell.split()[-1]
 
             part_int_cell = str(row[col_part_int]).strip()
             tokens_int = part_int_cell.split()
-            if len(tokens_int) < 2:
-                int_part = "0"
-            else:
-                raw_int = tokens_int[-1]  # np. "150" lub "90"
-                int_part = raw_int.replace(",", "").strip()
+            int_part = tokens_int[-1].replace(",", "").strip() if len(tokens_int) >= 2 else "0"
 
             part_dec_cell = str(row[col_part_dec]).strip()
             tokens_dec = part_dec_cell.split()
-            if len(tokens_dec) == 0:
-                dec_part = "00"
-            else:
-                dec_token = tokens_dec[0]  # np. ",00"
-                dec_part = dec_token.replace(".", "").strip()
+            dec_part = tokens_dec[0].replace(".", "").strip() if tokens_dec else "00"
 
-            # Zbuduj "150,00" i konwertuj
             if dec_part.startswith(","):
                 qty_str = f"{int_part}{dec_part}"
             else:
@@ -239,7 +223,7 @@ if file_ext == "pdf":
         })
 
 else:
-    # Jeśli wgrano gotowy Excel z WZ
+    # Wczytanie gotowego Excela z WZ
     try:
         df_wz_raw = pd.read_excel(uploaded_wz, dtype={"Kod produktu": str})
     except Exception as e:
@@ -250,7 +234,7 @@ else:
         st.error(
             "Plik WZ (Excel) musi mieć kolumny:\n"
             "- `Kod produktu` (EAN)\n"
-            "- `Ilość` (liczba sztuk w danym wierszu WZ)\n\n"
+            "- `Ilość` (liczba sztuk)\n\n"
             f"Znalezione nagłówki: {list(df_wz_raw.columns)}"
         )
         st.stop()
@@ -286,7 +270,7 @@ df_wz_grouped = (
 )
 
 # =====================================
-# 4) Połączenie (merge) i obliczenie różnic
+# 4) Scalanie (merge) i porównanie
 # =====================================
 df_compare = pd.merge(
     df_order_grouped,
