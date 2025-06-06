@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import pdfplumber
 from io import BytesIO
+import re
 
 st.set_page_config(
     page_title="📋 Porównywarka Zamówienie ↔ WZ (PDF→Excel)",
@@ -57,7 +58,7 @@ st.sidebar.markdown(
 )
 
 if uploaded_order is None or uploaded_wz is None:
-    st.info("Proszę wgrać oba pliki po lewej stronie: plik z Zamówieniem oraz plik z WZ.  ")
+    st.info("Proszę wgrać oba pliki po lewej stronie: plik z Zamówieniem oraz plik z WZ.")
     st.stop()
 
 # =====================================
@@ -69,7 +70,6 @@ except Exception as e:
     st.error(f"Nie udało się wczytać pliku zamówienia:\n```{e}```")
     st.stop()
 
-# Sprawdzenie, czy kolumny istnieją:
 if "Symbol" not in df_order.columns or "Ilość" not in df_order.columns:
     st.error(
         "Plik ZAMÓWIENIE musi mieć kolumny:\n"
@@ -79,7 +79,6 @@ if "Symbol" not in df_order.columns or "Ilość" not in df_order.columns:
     )
     st.stop()
 
-# Oczyść EAN-y (usuń spacje i sufiks .0) i konwertuj zamówioną ilość na liczbę
 df_order["Symbol"] = (
     df_order["Symbol"]
     .astype(str)
@@ -94,19 +93,51 @@ df_order["Ilość"] = pd.to_numeric(df_order["Ilość"], errors="coerce").fillna
 file_ext = uploaded_wz.name.lower().rsplit(".", maxsplit=1)[-1]
 
 if file_ext == "pdf":
-    # ---------------------------------
-    # 2a) Ekstrakcja WSZYSTKICH tabel z PDF za pomocą pdfplumber
-    # ---------------------------------
     try:
         with pdfplumber.open(uploaded_wz) as pdf:
             all_tables = []
+
+            def is_valid_wz_table(df: pd.DataFrame) -> bool:
+                cols = [str(c).lower().strip() for c in df.columns]
+                return any("kod" in c and "produkt" in c for c in cols) or any(c == "ilość" for c in cols)
+
             for page in pdf.pages:
                 tables_on_page = page.extract_tables()
+                added = False
                 for table in tables_on_page:
-                    # Jeśli tabela nie jest pusta i ma co najmniej 2 wiersze (nagłówek + dane)
                     if table and len(table) > 1:
                         df_page = pd.DataFrame(table[1:], columns=table[0])
-                        all_tables.append(df_page)
+                        if is_valid_wz_table(df_page):
+                            all_tables.append(df_page)
+                            added = True
+
+                if not added:
+                    single = page.extract_table()
+                    if single and len(single) > 1:
+                        df_single = pd.DataFrame(single[1:], columns=single[0])
+                        if is_valid_wz_table(df_single):
+                            all_tables.append(df_single)
+                            added = True
+
+                if not added:
+                    text = page.extract_text() or ""
+                    lines = text.split("\n")
+                    manual_rows = []
+                    for line in lines:
+                        ean_match = re.search(r"\b(\d{13})\b", line)
+                        qty_match = re.search(r"(\d{1,4},\d{2})", line)
+                        if ean_match and qty_match:
+                            ean = ean_match.group(1)
+                            qty_str = qty_match.group(1).replace(",", ".")
+                            try:
+                                qty = float(qty_str)
+                            except:
+                                qty = 0.0
+                            manual_rows.append([ean, qty])
+                    if manual_rows:
+                        df_manual = pd.DataFrame(manual_rows, columns=["Symbol", "Ilość_WZ"])
+                        all_tables.append(df_manual)
+
     except Exception as e:
         st.error(f"Nie udało się przeczytać PDF-a przez pdfplumber:\n```{e}```")
         st.stop()
@@ -115,16 +146,11 @@ if file_ext == "pdf":
         st.error("Nie znaleziono żadnych tabel w pliku PDF WZ.")
         st.stop()
 
-    # Scal wszystkie fragmenty tabel w jeden DataFrame
     df_wz_raw = pd.concat(all_tables, ignore_index=True)
-
-    # Sprawdź nagłówki w df_wz_raw
     cols = list(df_wz_raw.columns)
 
-    # 2a.1) Wariant A: jeśli istnieje kolumna nazwana dokładnie "Ilość"
     ilo_exists = next((col for col in cols if col.lower().strip() == "ilość"), None)
     if ilo_exists is not None:
-        # Kolumna 'Ilość' jest dostępna od razu
         col_qty = ilo_exists
         col_ean = next((col for col in cols if "kod" in col.lower() and "produkt" in col.lower()), None)
         if col_ean is None:
@@ -134,13 +160,10 @@ if file_ext == "pdf":
             )
             st.stop()
 
-        # Wyciągnij tylko te dwie kolumny
         df_wz = pd.DataFrame({
             "Symbol": df_wz_raw[col_ean].astype(str),
             "Ilość_WZ": df_wz_raw[col_qty]
         })
-
-        # Oczyść EAN-y i skonwertuj 'Ilość_WZ' na float
         df_wz["Symbol"] = (
             df_wz["Symbol"]
             .str.strip()
@@ -154,19 +177,8 @@ if file_ext == "pdf":
         df_wz["Ilość_WZ"] = pd.to_numeric(df_wz["Ilość_WZ"], errors="coerce").fillna(0)
 
     else:
-        # ---------------------------------
-        # 2a.2) Wariant B: jeśli nie ma kolumny "Ilość" wprost, to musimy złożyć ją z dwóch pól:
-        #    - "Termin ważności Ilo" (część całkowita ilości po dacie)
-        #    - "ść Waga brutto" (część dziesiętna + wagę brutto)
-        # ---------------------------------
-        col_part_int = next(
-            (col for col in cols if "termin" in col.lower() and "ilo" in col.lower()),
-            None
-        )
-        col_part_dec = next(
-            (col for col in cols if "waga" in col.lower()),
-            None
-        )
+        col_part_int = next((col for col in cols if "termin" in col.lower() and "ilo" in col.lower()), None)
+        col_part_dec = next((col for col in cols if "waga" in col.lower()), None)
         col_ean = next((col for col in cols if "kod" in col.lower() and "produkt" in col.lower()), None)
 
         if col_part_int is None or col_part_dec is None or col_ean is None:
@@ -177,7 +189,6 @@ if file_ext == "pdf":
             )
             st.stop()
 
-        # Teraz odtwórzmy 'Ilość_WZ' w każdym wierszu:
         eans = []
         ilosci = []
         for _, row in df_wz_raw.iterrows():
@@ -185,25 +196,22 @@ if file_ext == "pdf":
             if raw_ean == "" or pd.isna(raw_ean):
                 continue
 
-            # Część całkowita: ostatni token w kolumnie col_part_int
             part_int_cell = str(row[col_part_int]).strip()
             tokens_int = part_int_cell.split()
             if len(tokens_int) < 2:
                 int_part = "0"
             else:
-                raw_int = tokens_int[-1]  # np. "150" lub "90"
+                raw_int = tokens_int[-1]
                 int_part = raw_int.replace(",", "").strip()
 
-            # Część dziesiętna: pierwszy token w kolumnie col_part_dec
             part_dec_cell = str(row[col_part_dec]).strip()
             tokens_dec = part_dec_cell.split()
             if len(tokens_dec) == 0:
                 dec_part = "00"
             else:
-                dec_token = tokens_dec[0]  # np. ",00"
-                dec_part = dec_token.replace(".", "").strip()  # usuwamy ewentualne kropki
+                dec_token = tokens_dec[0]
+                dec_part = dec_token.replace(".", "").strip()
 
-            # Zbuduj string "150,00", zamień na "150.00" i skonwertuj
             if dec_part.startswith(","):
                 qty_str = f"{int_part}{dec_part}"
             else:
@@ -221,9 +229,6 @@ if file_ext == "pdf":
         })
 
 else:
-    # ---------------------------------
-    # 2b) Jeżeli wgrano gotowy Excel z WZ
-    # ---------------------------------
     try:
         df_wz_raw = pd.read_excel(uploaded_wz, dtype={"Kod produktu": str})
     except Exception as e:
