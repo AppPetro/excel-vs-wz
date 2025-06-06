@@ -9,7 +9,7 @@ st.set_page_config(
     layout="wide",
 )
 
-st.title("📋 Porównywarka Zamówienie (Excel) vs. WZ (PDF lub Excel)")
+st.title("📋JESZCZE NIE DZIAŁA DOBRZE Porównywarka Zamówienie (Excel) vs. WZ (PDF lub Excel)")
 
 st.markdown(
     """
