@@ -24,9 +24,9 @@ st.markdown(
        - `Termin ważności Ilo` (część całkowita)
        - `ść Waga brutto`  (część dziesiętna)
     3. Aplikacja:
-       - z pierwszej strony PDF „ręcznie” wyciągnie z każdej linii EAN + ilość (regex),
-       - z kolejnych stron użyje `extract_tables()` (jeśli znajdzie prawidłową tabelę),
-       - odbuduje kolumnę `Ilość_WZ`,
+       - z pierwszej strony PDF **ręcznie** wyciągnie z każdej linii EAN + ilość (regex),
+       - z kolejnych stron użyje `extract_tables()`,  
+       - odbuduje kolumnę `Ilość_WZ`,  
        - zsumuje po EAN-ach i porówna z zamówieniem.
     """
 )
@@ -58,7 +58,7 @@ st.sidebar.markdown(
 )
 
 if uploaded_order is None or uploaded_wz is None:
-    st.info("Proszę wgrać oba pliki: Excel (zamówienie) oraz PDF/Excel (WZ).")
+    st.info("Proszę wgrać oba pliki: Excel z zamówieniem oraz PDF/Excel z WZ.")
     st.stop()
 
 # ==============================
@@ -102,16 +102,17 @@ if file_ext == "pdf":
 
             for page_idx, page in enumerate(pdf.pages):
                 if page_idx == 0:
-                    # 3.1) Pierwsza strona → linia po linii: EAN + ilość
+                    # 3.1) Pierwsza strona → linia po linii: znajdź EAN+ilość w tej samej linii
                     text = page.extract_text() or ""
                     lines = text.split("\n")
                     manual_rows = []
+                    # Regex: grupa1=EAN (13 cyfr), grupa2=ilość (format "xx,xx")
+                    pattern = re.compile(r"\b(\d{13})\b.*?\b(\d{1,4},\d{2})\b")
                     for line in lines:
-                        ean_match = re.search(r"\b(\d{13})\b", line)
-                        qty_match = re.search(r"(\d{1,4},\d{2})", line)
-                        if ean_match and qty_match:
-                            ean = ean_match.group(1)
-                            qty_str = qty_match.group(1).replace(",", ".")
+                        m = pattern.search(line)
+                        if m:
+                            ean = m.group(1)
+                            qty_str = m.group(2).replace(",", ".")
                             try:
                                 qty = float(qty_str)
                             except:
@@ -131,13 +132,14 @@ if file_ext == "pdf":
                             if is_valid_wz_table(df_page):
                                 all_tables.append(df_page)
                                 added = True
-                    # fallback, gdy extract_tables nie znalazł niczego odpowiedniego
+                    # fallback: extract_table()
                     if not added:
                         single = page.extract_table()
                         if single and len(single) > 1:
                             df_single = pd.DataFrame(single[1:], columns=single[0])
                             if is_valid_wz_table(df_single):
                                 all_tables.append(df_single)
+
     except Exception as e:
         st.error(f"Nie udało się przeczytać PDF przez pdfplumber:\n```{e}```")
         st.stop()
@@ -175,14 +177,14 @@ if file_ext == "pdf":
         df_wz["Ilość_WZ"] = pd.to_numeric(df_wz["Ilość_WZ"], errors="coerce").fillna(0)
 
     else:
-        # 3.3.B) Rozbita kolumna „Ilość” → „Termin ważności Ilo” + „ść Waga brutto”
+        # 3.3.B) Rozbita kolumna „Ilość” (część całkowita + dziesiętna)
         col_part_int = next((col for col in cols if "termin" in col.lower() and "ilo" in col.lower()), None)
         col_part_dec = next((col for col in cols if "waga" in col.lower()), None)
         col_ean = next((col for col in cols if "kod" in col.lower() and "produkt" in col.lower()), None)
 
         if col_part_int is None or col_part_dec is None or col_ean is None:
             st.error(
-                "Brak kolumn w rozbitym układzie WZ (PDF).\n"
+                "Brak wymagalnych kolumn w rozbitym układzie WZ (PDF).\n"
                 f"Znalezione nagłówki: {cols}\n"
                 "Spodziewane: 'Kod produktu', 'Termin ważności Ilo', 'ść Waga brutto'."
             )
