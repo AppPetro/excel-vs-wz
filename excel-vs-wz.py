@@ -24,13 +24,14 @@ st.markdown(
        - rozpozna synonimy kolumn w obu plikach,
        - z PDF → każdej stronie wyciągnie tabelę przez `extract_tables()` i „napasuje” kolumny EAN + Ilość (lub odtworzy rozbitą ilość),
        - zsumuje po EAN-ach i porówna z zamówieniem,
-       - wyświetli wynik w tabeli, kolorując wiersze na zielono (OK) lub czerwoną (gdy coś nie pasuje),
+       - wyświetli wynik w tabeli, kolorując wiersze na zielono (OK) lub czerwono (gdy coś nie pasuje),
+       - wyświetli komunikat u dołu w kolorze zielonym (“Pozycje się zgadzają”) lub czerwonym (“Pozycje się nie zgadzają”),
        - pozwoli pobrać raport jako Excel.
     """
 )
 
 # =============================================================================
-# Pomocniczna funkcja do kolorowania wierszy wg kolumny "Status"
+# Funkcja do kolorowania wierszy wg kolumny "Status"
 # =============================================================================
 def highlight_status_row(row):
     """
@@ -114,7 +115,7 @@ if col_ean_order is None or col_qty_order is None:
     )
     st.stop()
 
-# Oczyszczenie i konwersja wartości
+# Oczyszczanie i konwersja wartości
 df_order = pd.DataFrame()
 df_order["Symbol"] = (
     df_order_raw[col_ean_order].astype(str)
@@ -266,7 +267,7 @@ else:
     # Synonimy dla kolumny Ilość w WZ
     synonyms_qty_wz = {
         col.lower().replace(" ", "").replace("_", ""): col
-        for col in ["Ilość", "Ilosc", "ilosc", "Quantity", "quantity", "Qty", "qty"]
+        for col in ["Iloć", "Ilosc", "ilosc", "Quantity", "quantity", "Qty", "qty"]
     }
 
     col_ean_wz = None
@@ -368,6 +369,7 @@ styled = (
 
 st.dataframe(styled, use_container_width=True)
 
+# Przycisk do pobrania raportu
 def to_excel(df: pd.DataFrame) -> bytes:
     output = BytesIO()
     writer = pd.ExcelWriter(output, engine="openpyxl")
@@ -382,4 +384,18 @@ st.download_button(
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 )
 
-st.success("✅ Gotowe! Porównanie wykonane pomyślnie.")
+# =============================================================================
+# 7) Komunikat końcowy, kolorowany na podstawie tego, czy wszystkie pozycje są OK
+# =============================================================================
+all_ok = (df_compare["Status"] == "OK").all()
+
+if all_ok:
+    st.markdown(
+        "<h4 style='color:green;'>✅ Pozycje się zgadzają</h4>",
+        unsafe_allow_html=True
+    )
+else:
+    st.markdown(
+        "<h4 style='color:red;'>❌ Pozycje się nie zgadzają</h4>",
+        unsafe_allow_html=True
+    )
