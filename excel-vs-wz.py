@@ -74,7 +74,7 @@ if "Symbol" not in df_order.columns or "Ilość" not in df_order.columns:
     )
     st.stop()
 
-# Oczyszczenie EAN-ów
+# Oczyszczanie EAN-ów i konwersja Ilość
 df_order["Symbol"] = (
     df_order["Symbol"]
     .astype(str)
@@ -135,7 +135,7 @@ if file_ext == "pdf":
         "Ilość_WZ": df_wz_raw[col_ilosc]
     })
 
-    # Oczyszczenie Symbol i konwersja Ilość_WZ
+    # Oczyszczanie Symbol i konwersja Ilość_WZ na liczbę
     df_wz["Symbol"] = (
         df_wz["Symbol"]
         .str.strip()
@@ -146,9 +146,8 @@ if file_ext == "pdf":
         .astype(str)
         .str.replace(",", ".", regex=False)
         .str.replace(r"\s+", "", regex=True)
-        .astype(float, errors="coerce")
-        .fillna(0)
     )
+    df_wz["Ilość_WZ"] = pd.to_numeric(df_wz["Ilość_WZ"], errors="coerce").fillna(0)
 
 else:
     # 2b) Użytkownik wgrał gotowy Excel z WZ
@@ -175,14 +174,14 @@ else:
         .str.strip()
         .str.replace(r"\.0+$", "", regex=True)
     )
+
     df_wz["Ilość_WZ"] = (
         df_wz["Ilość_WZ"]
         .astype(str)
         .str.replace(",", ".", regex=False)
         .str.replace(r"\s+", "", regex=True)
-        .astype(float, errors="coerce")
-        .fillna(0)
     )
+    df_wz["Ilość_WZ"] = pd.to_numeric(df_wz["Ilość_WZ"], errors="coerce").fillna(0)
 
 # -----------------------------------
 # 3) Grupowanie po Symbol (EAN) – sumowanie ilości
