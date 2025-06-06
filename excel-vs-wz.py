@@ -28,6 +28,7 @@ st.markdown(
     """
 )
 
+# Sidebar: upload plików
 st.sidebar.header("Krok 1: Wgraj plik ZAMÓWIENIE (Excel)")
 uploaded_order = st.sidebar.file_uploader(
     label="Wybierz plik Excel (zamówienie)",
@@ -73,7 +74,7 @@ if "Symbol" not in df_order.columns or "Ilość" not in df_order.columns:
     )
     st.stop()
 
-# Oczyszczenie EAN-ów: usuń spacje, sufiks ".0"
+# Oczyszczenie EAN-ów
 df_order["Symbol"] = (
     df_order["Symbol"]
     .astype(str)
@@ -88,12 +89,11 @@ df_order["Ilość"] = pd.to_numeric(df_order["Ilość"], errors="coerce").fillna
 file_ext = uploaded_wz.name.lower().rsplit(".", maxsplit=1)[-1]
 
 if file_ext == "pdf":
-    # 2a) Ekstrakcja tabeli z PDF za pomocą pdfplumber
+    # 2a) Ekstrakcja tabeli z PDF przy pomocy pdfplumber
     try:
         with pdfplumber.open(uploaded_wz) as pdf:
             all_tables = []
             for page in pdf.pages:
-                # extract_table zwraca listę wierszy, gdzie wiersz to lista wartości
                 table = page.extract_table()
                 if table:
                     df_page = pd.DataFrame(table[1:], columns=table[0])
@@ -106,18 +106,15 @@ if file_ext == "pdf":
         st.error("Nie znaleziono żadnych tabel w pliku PDF WZ.")
         st.stop()
 
-    # Połącz wszystkie DataFrame-y w jeden
     df_wz_raw = pd.concat(all_tables, ignore_index=True)
 
-    # Dopasuj kolumny: "Kod produktu" (EAN) i "Ilość"
-    # Spróbuj wykryć nagłówek zawierający słowa "Kod" i "produkt"
+    # Dopasowanie kolumn "Kod produktu" i "Ilość"
     col_kod = None
     for col in df_wz_raw.columns:
         if "kod" in col.lower() and "produkt" in col.lower():
             col_kod = col
             break
 
-    # Spróbuj wykryć kolumnę z "ilo" w nazwie (aby uchwycić "Ilość")
     col_ilosc = None
     for col in df_wz_raw.columns:
         if "ilo" in col.lower():
@@ -138,14 +135,12 @@ if file_ext == "pdf":
         "Ilość_WZ": df_wz_raw[col_ilosc]
     })
 
-    # Oczyszczenie Symbol → usuń spacje, sufiks ".0"
+    # Oczyszczenie Symbol i konwersja Ilość_WZ
     df_wz["Symbol"] = (
         df_wz["Symbol"]
         .str.strip()
         .str.replace(r"\.0+$", "", regex=True)
     )
-
-    # Konwersja Ilość_WZ → float (jeśli były przecinki lub spacje w liczbie)
     df_wz["Ilość_WZ"] = (
         df_wz["Ilość_WZ"]
         .astype(str)
@@ -156,7 +151,7 @@ if file_ext == "pdf":
     )
 
 else:
-    # 2b) Jeżeli użytkownik wgrał gotowy Excel z WZ
+    # 2b) Użytkownik wgrał gotowy Excel z WZ
     try:
         df_wz_raw = pd.read_excel(uploaded_wz, dtype={"Kod produktu": str})
     except Exception as e:
@@ -180,7 +175,6 @@ else:
         .str.strip()
         .str.replace(r"\.0+$", "", regex=True)
     )
-
     df_wz["Ilość_WZ"] = (
         df_wz["Ilość_WZ"]
         .astype(str)
@@ -208,7 +202,7 @@ df_wz_grouped = (
 )
 
 # -----------------------------------
-# 4) Merge i porównanie
+# 4) Scalanie (merge) i obliczenie różnic
 # -----------------------------------
 df_compare = pd.merge(
     df_order_grouped,
@@ -220,10 +214,7 @@ df_compare = pd.merge(
 
 df_compare["Zamówiona_ilość"] = df_compare["Zamówiona_ilość"].fillna(0)
 df_compare["Wydana_ilość"]    = df_compare["Wydana_ilość"].fillna(0)
-
-df_compare["Różnica"] = (
-    df_compare["Zamówiona_ilość"] - df_compare["Wydana_ilość"]
-)
+df_compare["Różnica"] = df_compare["Zamówiona_ilość"] - df_compare["Wydana_ilość"]
 
 def status_row(row):
     if row["_merge"] == "left_only":
@@ -237,7 +228,6 @@ def status_row(row):
 
 df_compare["Status"] = df_compare.apply(status_row, axis=1)
 
-# Posortuj (najpierw błędy, potem OK)
 status_order = ["Różni się", "Brak we WZ", "Brak w zamówieniu", "OK"]
 df_compare["Status"] = pd.Categorical(
     df_compare["Status"], categories=status_order, ordered=True
@@ -245,7 +235,7 @@ df_compare["Status"] = pd.Categorical(
 df_compare = df_compare.sort_values(["Status", "Symbol"])
 
 # -----------------------------------
-# 5) Wyświetlenie i pobranie wyniku
+# 5) Wyświetlenie wyniku i pobranie raportu
 # -----------------------------------
 st.markdown("### 📊 Wynik porównania")
 st.dataframe(
