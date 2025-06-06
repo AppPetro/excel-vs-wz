@@ -267,7 +267,7 @@ else:
     # Synonimy dla kolumny Ilość w WZ
     synonyms_qty_wz = {
         col.lower().replace(" ", "").replace("_", ""): col
-        for col in ["Iloć", "Ilosc", "ilosc", "Quantity", "quantity", "Qty", "qty"]
+        for col in ["Ilość", "Ilosc", "ilosc", "Quantity", "quantity", "Qty", "qty"]
     }
 
     col_ean_wz = None
