@@ -18,11 +18,11 @@ st.markdown(
        - EAN: `Symbol`, `symbol`, `kod ean`, `kod_ean`, `ean`, `kod produktu`, `kod_produktu`
        - Ilość: `Ilość`, `Ilosc`, `ilosc`, `Quantity`, `quantity`, `Qty`, `qty`, `sztuki`, `sztuka`
     2. Wgraj WZ w formie **PDF** (lub Excel), gdzie kolumna EAN może się nazywać:
-       - `Kod produktu`, `kod produkt`, `kod_produktu`, `EAN`, `ean`, `symbol`
+       - `Kod produktu`, `kod produktu`, `kod_produktu`, `EAN`, `ean`, `symbol`
        - Kolumna ilości może się nazywać: `Ilość`, `Ilosc`, `ilosc`, `Quantity`, `quantity`, `Qty`, `qty`
     3. Aplikacja:
        - rozpozna synonimy kolumn w obu plikach,
-       - z PDF → każdej stronie wyciągnie tabelę przez `extract_tables()` i „napasuje” kolumny EAN + Ilość (lub odtworzy rozbitą ilość),
+       - z PDF → każdej stronie wyciągnie tabelę przez `extract_tables()` i „napasuje” kolumny EAN + Ilość (albo odtworzy rozbitą ilość),
        - zsumuje po EAN-ach i porówna z zamówieniem,
        - wyświetli wynik w tabeli, kolorując wiersze na zielono (OK) lub czerwono (gdy coś nie pasuje),
        - wyświetli komunikat u dołu w kolorze zielonym (“Pozycje się zgadzają”) lub czerwonym (“Pozycje się nie zgadzają”),
@@ -41,6 +41,12 @@ def highlight_status_row(row):
     """
     color = "#c6efce" if row["Status"] == "OK" else "#ffc7ce"
     return [f"background-color: {color}" for _ in row.index]
+
+# =============================================================================
+# Pomocnicza funkcja do uproszczenia nazwy kolumny (usuwa spacje, NBSP i podkreślniki)
+# =============================================================================
+def normalize_col_name(name: str) -> str:
+    return name.lower().replace(" ", "").replace("\xa0", "").replace("_", "")
 
 # =============================================================================
 # 1) Sidebar: wgrywanie plików
@@ -83,7 +89,7 @@ except Exception as e:
 
 # Synonimy dla kolumny EAN w zamówieniu
 synonyms_ean_order = {
-    col.lower().replace(" ", "").replace("_", ""): col
+    normalize_col_name(col): col
     for col in [
         "Symbol", "symbol", "kod ean", "kod_ean",
         "ean", "kod produktu", "kod_produktu"
@@ -91,7 +97,7 @@ synonyms_ean_order = {
 }
 # Synonimy dla kolumny Ilość w zamówieniu
 synonyms_qty_order = {
-    col.lower().replace(" ", "").replace("_", ""): col
+    normalize_col_name(col): col
     for col in [
         "Ilość", "Ilosc", "ilosc", "Quantity",
         "quantity", "Qty", "qty", "sztuki", "sztuka"
@@ -100,12 +106,12 @@ synonyms_qty_order = {
 
 def find_column_by_synonyms(df: pd.DataFrame, synonyms: dict):
     """
-    Znajduje w df kolumnę, której uproszczona nazwa (bez spacji/underscore, małe litery)
+    Znajduje w df kolumnę, której ujednolicona nazwa (bez spacji/NBSP/podkreślników, małe litery)
     pasuje do któregoś klucza słownika synonyms.
     Zwraca oryginalną nazwę kolumny albo None.
     """
     for raw_col in df.columns:
-        key = raw_col.lower().replace(" ", "").replace("_", "")
+        key = normalize_col_name(raw_col)
         if key in synonyms:
             return raw_col
     return None
@@ -143,7 +149,7 @@ if extension == "pdf":
 
             # Synonimy dla kolumny EAN w WZ
             synonyms_ean_wz = {
-                col.lower().replace(" ", "").replace("_", ""): col
+                normalize_col_name(col): col
                 for col in [
                     "Kod produktu", "kod produkt", "kod_produktu",
                     "EAN", "ean", "symbol"
@@ -151,7 +157,7 @@ if extension == "pdf":
             }
             # Synonimy dla kolumny Ilość w WZ (bez rozbicia)
             synonyms_qty_wz = {
-                col.lower().replace(" ", "").replace("_", ""): col
+                normalize_col_name(col): col
                 for col in [
                     "Ilość", "Ilosc", "ilosc",
                     "Quantity", "quantity", "Qty", "qty"
@@ -172,7 +178,7 @@ if extension == "pdf":
                 # 1) Znajdź kolumnę EAN
                 col_ean = None
                 for raw_col in cols:
-                    key = raw_col.lower().replace(" ", "").replace("_", "")
+                    key = normalize_col_name(raw_col)
                     if key in synonyms_ean_wz:
                         col_ean = raw_col
                         break
@@ -182,7 +188,7 @@ if extension == "pdf":
                 # 2) Znajdź kolumnę Ilość (jeśli istnieje „prostą”)
                 col_qty = None
                 for raw_col in cols:
-                    key = raw_col.lower().replace(" ", "").replace("_", "")
+                    key = normalize_col_name(raw_col)
                     if key in synonyms_qty_wz:
                         col_qty = raw_col
                         break
@@ -204,16 +210,16 @@ if extension == "pdf":
                         wz_rows.append([ean, qty])
 
                 else:
-                    # 3) Brak prostej kolumny „Ilość” → używamy:
-                    #    'Termin ważności Ilo' + 'ść Waga brutto'
-                    col_part_int = next(
-                        (c for c in cols if "termin" in c.lower() and "ilo" in c.lower()),
-                        None
-                    )
-                    col_part_dec = next(
-                        (c for c in cols if "waga" in c.lower()),
-                        None
-                    )
+                    # Brak prostej kolumny „Ilość” → próbujemy
+                    # 'Termin ważności Ilo' + 'ść Waga brutto'
+                    col_part_int = None
+                    col_part_dec = None
+                    for raw_col in cols:
+                        low = raw_col.lower()
+                        if "termin" in low and "ilo" in low:
+                            col_part_int = raw_col
+                        if "waga" in low:
+                            col_part_dec = raw_col
                     if col_part_int is None or col_part_dec is None:
                         return  # Niepoprawne nagłówki → pomiń
 
@@ -225,17 +231,17 @@ if extension == "pdf":
                         ean = last_token
 
                         # --- Poprawione wyciąganie ilości ---
-                        # 3.1) Z 'Termin ważności Ilo' wyciągamy ostatnią liczbę (ciąg cyfr) na końcu:
+                        # 3.1) Z 'Termin ważności Ilo' wyciągamy ostatnią liczbę (ciąg cyfr) na końcu ciągu
                         part_int_cell = str(row[col_part_int])
                         m_int = re.search(r"(\d+),?$", part_int_cell)
                         raw_int = m_int.group(1) if m_int else "0"
 
                         # 3.2) Z 'ść Waga brutto' wyciągamy pierwsze dwie cyfry po przecinku
                         part_dec_cell = str(row[col_part_dec])
-                        m_dec = re.search(r"^,?(\d{2})", part_dec_cell)
+                        m_dec = re.search(r",(\d{2})", part_dec_cell)
                         raw_dec = m_dec.group(1) if m_dec else "00"
 
-                        # 3.3) Scal w formę "3,00" → float 3.0
+                        # 3.3) Scal w "X,YY" → float
                         qty_str = f"{raw_int},{raw_dec}"
                         try:
                             qty = float(qty_str.replace(",", "."))
@@ -275,7 +281,7 @@ else:
 
     # Synonimy dla kolumny EAN w WZ
     synonyms_ean_wz = {
-        col.lower().replace(" ", "").replace("_", ""): col
+        normalize_col_name(col): col
         for col in [
             "Kod produktu", "kod produkt", "kod_produktu",
             "EAN", "ean", "symbol"
@@ -283,7 +289,7 @@ else:
     }
     # Synonimy dla kolumny Ilość w WZ
     synonyms_qty_wz = {
-        col.lower().replace(" ", "").replace("_", ""): col
+        normalize_col_name(col): col
         for col in [
             "Ilość", "Ilosc", "ilosc",
             "Quantity", "quantity", "Qty", "qty"
@@ -292,14 +298,14 @@ else:
 
     col_ean_wz = None
     for raw_col in df_wz_raw.columns:
-        key = raw_col.lower().replace(" ", "").replace("_", "")
+        key = normalize_col_name(raw_col)
         if key in synonyms_ean_wz:
             col_ean_wz = raw_col
             break
 
     col_qty_wz = None
     for raw_col in df_wz_raw.columns:
-        key = raw_col.lower().replace(" ", "").replace("_", "")
+        key = normalize_col_name(raw_col)
         if key in synonyms_qty_wz:
             col_qty_wz = raw_col
             break
