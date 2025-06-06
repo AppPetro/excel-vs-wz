@@ -250,7 +250,8 @@ def to_excel(df: pd.DataFrame) -> bytes:
     output = BytesIO()
     writer = pd.ExcelWriter(output, engine="openpyxl")
     df.to_excel(writer, index=False, sheet_name="Porównanie")
-    writer.save()
+    # zamiast writer.save() używamy writer.close()
+    writer.close()
     return output.getvalue()
 
 st.download_button(
