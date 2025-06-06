@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-import tabula  # do konwersji PDF→DataFrame
+import pdfplumber
 from io import BytesIO
 
 st.set_page_config(
@@ -21,8 +21,8 @@ st.markdown(
        - `Kod produktu` (EAN)
        - `Ilość` (liczba wydanych sztuk w danym wierszu WZ)
     3. Aplikacja automatycznie:
-       - skonwertuje PDF → tabelę,
-       - wyciągnie kolumny EAN (`Kod produktu`) i ilość,
+       - wyciągnie tabelę z PDF-a za pomocą `pdfplumber`,
+       - wyciągnie kolumny EAN (`Kod produktu`) i `Ilość`,
        - zsumuje te ilości po EAN-ach,
        - porówna z zamówieniem i wygeneruje raport z różnicą.
     """
@@ -44,7 +44,7 @@ uploaded_wz = st.sidebar.file_uploader(
 
 st.sidebar.markdown(
     """
-    - Jeśli wgrasz **PDF**, aplikacja użyje `tabula-py` do wyciągnięcia tabeli z kolumnami:
+    - Jeśli wgrasz **PDF**, aplikacja użyje `pdfplumber` do wyciągnięcia tabeli z kolumnami:
       `Kod produktu` (EAN) i `Ilość`.  
     - Jeśli wgrasz **Excel** (plik już wyeksportowany ręcznie ze WZ→.xlsx), 
       aplikacja odczyta kolumny `Kod produktu` i `Ilość` bezpośrednio.
@@ -64,7 +64,6 @@ except Exception as e:
     st.error(f"Nie udało się wczytać pliku zamówienia:\n```{e}```")
     st.stop()
 
-# Sprawdzenie, czy kolumny istnieją
 if "Symbol" not in df_order.columns or "Ilość" not in df_order.columns:
     st.error(
         "Plik ZAMÓWIENIE musi mieć kolumny:\n"
@@ -81,7 +80,6 @@ df_order["Symbol"] = (
     .str.strip()
     .str.replace(r"\.0+$", "", regex=True)
 )
-# Upewnij się, że Ilość jest numeric
 df_order["Ilość"] = pd.to_numeric(df_order["Ilość"], errors="coerce").fillna(0)
 
 # -----------------------------------
@@ -90,44 +88,39 @@ df_order["Ilość"] = pd.to_numeric(df_order["Ilość"], errors="coerce").fillna
 file_ext = uploaded_wz.name.lower().rsplit(".", maxsplit=1)[-1]
 
 if file_ext == "pdf":
-    # 2a) Używamy tabula-py, by wyciągnąć wszystkie tabele z PDF
-    #    Domyślnie tabula.read_pdf zwraca listę DataFrame
+    # 2a) Ekstrakcja tabeli z PDF za pomocą pdfplumber
     try:
-        dfs_from_pdf = tabula.read_pdf(
-            uploaded_wz,
-            pages="all",
-            multiple_tables=True,
-            pandas_options={"dtype": str}
-        )
+        with pdfplumber.open(uploaded_wz) as pdf:
+            all_tables = []
+            for page in pdf.pages:
+                # extract_table zwraca listę wierszy, gdzie wiersz to lista wartości
+                table = page.extract_table()
+                if table:
+                    df_page = pd.DataFrame(table[1:], columns=table[0])
+                    all_tables.append(df_page)
     except Exception as e:
-        st.error(f"Nie udało się odczytać PDF-a przez tabula-py:\n```{e}```")
+        st.error(f"Nie udało się przeczytać PDF-a przez pdfplumber:\n```{e}```")
         st.stop()
 
-    if len(dfs_from_pdf) == 0:
+    if len(all_tables) == 0:
         st.error("Nie znaleziono żadnych tabel w pliku PDF WZ.")
         st.stop()
 
-    # Połącz wszystkie tabele w jeden DataFrame (vertical stack)
-    df_wz_raw = pd.concat(dfs_from_pdf, ignore_index=True)
+    # Połącz wszystkie DataFrame-y w jeden
+    df_wz_raw = pd.concat(all_tables, ignore_index=True)
 
-    # Zakładamy, że po ekstrakcji z PDF mamy kolumny, które zawierają co najmniej:
-    # - "Kod produktu" (EAN)
-    # - "Ilość"
-    # Jeśli nazwy nagłówków są inne, spróbuj je zidentyfikować ręcznie.
-    expected_cols = ["Kod produktu", "Ilość"]
-    cols_lower = [col.lower() for col in df_wz_raw.columns]
-
-    # Znajdź, czy którakolwiek kolumna zawiera frazę "kod" i "produkt"
-    # oraz "ilość" (ignore case). Jeśli nazwy trochę się różnią, dopasujemy.
+    # Dopasuj kolumny: "Kod produktu" (EAN) i "Ilość"
+    # Spróbuj wykryć nagłówek zawierający słowa "Kod" i "produkt"
     col_kod = None
     for col in df_wz_raw.columns:
         if "kod" in col.lower() and "produkt" in col.lower():
             col_kod = col
             break
 
+    # Spróbuj wykryć kolumnę z "ilo" w nazwie (aby uchwycić "Ilość")
     col_ilosc = None
     for col in df_wz_raw.columns:
-        if "ilo" in col.lower():  # złap "Ilość", "Ilo��ć" itp.
+        if "ilo" in col.lower():
             col_ilosc = col
             break
 
@@ -136,33 +129,31 @@ if file_ext == "pdf":
             "Po ekstrakcji PDF nie udało się odnaleźć kolumn:\n"
             "- `Kod produktu` (EAN)\n"
             "- `Ilość`\n\n"
-            f"A zostały znalezione kolumny:\n{list(df_wz_raw.columns)}\n\n"
-            "Upewnij się, że PDF zawiera tabelę z odpowiednimi nagłówkami."
+            f"A zostały znalezione kolumny: {list(df_wz_raw.columns)}"
         )
         st.stop()
 
-    # Tworzymy nowy DataFrame z dwóch wybranych kolumn
     df_wz = pd.DataFrame({
         "Symbol": df_wz_raw[col_kod].astype(str),
         "Ilość_WZ": df_wz_raw[col_ilosc]
     })
 
-    # Oczyszczenie: usuń spacje, sufiks ".0", przecinki w liczbach
+    # Oczyszczenie Symbol → usuń spacje, sufiks ".0"
     df_wz["Symbol"] = (
         df_wz["Symbol"]
         .str.strip()
         .str.replace(r"\.0+$", "", regex=True)
     )
-    # Jeśli Ilość_WZ to string z przecinkiem, zamień na float
+
+    # Konwersja Ilość_WZ → float (jeśli były przecinki lub spacje w liczbie)
     df_wz["Ilość_WZ"] = (
         df_wz["Ilość_WZ"]
         .astype(str)
         .str.replace(",", ".", regex=False)
-        .str.replace(r"\s+", "", regex=True)  # usuń ewentualne spacje wewnątrz "1 500"
-        .astype(float, errors="ignore")
+        .str.replace(r"\s+", "", regex=True)
+        .astype(float, errors="coerce")
+        .fillna(0)
     )
-    # Jeśli któraś wartość nie da się skonwertować na float, nadaj 0
-    df_wz["Ilość_WZ"] = pd.to_numeric(df_wz["Ilość_WZ"], errors="coerce").fillna(0)
 
 else:
     # 2b) Jeżeli użytkownik wgrał gotowy Excel z WZ
@@ -172,19 +163,17 @@ else:
         st.error(f"Nie udało się wczytać pliku WZ (Excel):\n```{e}```")
         st.stop()
 
-    # Sprawdzenie kolumn
     if "Kod produktu" not in df_wz_raw.columns or "Ilość" not in df_wz_raw.columns:
         st.error(
             "Plik WZ (Excel) musi mieć kolumny:\n"
             "- `Kod produktu` (EAN)\n"
             "- `Ilość` (liczba sztuk w danym wierszu WZ)\n\n"
-            f"A zostały znalezione kolumny:\n{list(df_wz_raw.columns)}"
+            f"A zostały znalezione kolumny: {list(df_wz_raw.columns)}"
         )
         st.stop()
 
     df_wz = df_wz_raw.rename(columns={"Kod produktu": "Symbol", "Ilość": "Ilość_WZ"})
 
-    # Oczyszczenie Symbol → usuń spacje, sufiks ".0"
     df_wz["Symbol"] = (
         df_wz["Symbol"]
         .astype(str)
@@ -192,15 +181,14 @@ else:
         .str.replace(r"\.0+$", "", regex=True)
     )
 
-    # Konwersja Ilość_WZ → float (na wypadek, gdyby było "150,00")
     df_wz["Ilość_WZ"] = (
         df_wz["Ilość_WZ"]
         .astype(str)
         .str.replace(",", ".", regex=False)
         .str.replace(r"\s+", "", regex=True)
-        .astype(float, errors="ignore")
+        .astype(float, errors="coerce")
+        .fillna(0)
     )
-    df_wz["Ilość_WZ"] = pd.to_numeric(df_wz["Ilość_WZ"], errors="coerce").fillna(0)
 
 # -----------------------------------
 # 3) Grupowanie po Symbol (EAN) – sumowanie ilości
@@ -249,7 +237,7 @@ def status_row(row):
 
 df_compare["Status"] = df_compare.apply(status_row, axis=1)
 
-# Posortuj (opcjonalnie najpierw "Różni się", "Brak we WZ", "Brak w zamówieniu", a na końcu "OK")
+# Posortuj (najpierw błędy, potem OK)
 status_order = ["Różni się", "Brak we WZ", "Brak w zamówieniu", "OK"]
 df_compare["Status"] = pd.Categorical(
     df_compare["Status"], categories=status_order, ordered=True
@@ -269,7 +257,6 @@ st.dataframe(
     use_container_width=True
 )
 
-# Przygotuj plik do pobrania (.xlsx)
 def to_excel(df: pd.DataFrame) -> bytes:
     output = BytesIO()
     writer = pd.ExcelWriter(output, engine="openpyxl")
@@ -285,4 +272,3 @@ st.download_button(
 )
 
 st.success("✅ Gotowe! Porównanie wykonane pomyślnie.")
-
