@@ -20,9 +20,13 @@ st.markdown(
        zawierający przynajmniej kolumny:
        - `Kod produktu` (EAN)
        - `Ilość` (liczba wydanych sztuk w danym wierszu WZ)
+       LUB, w przypadku PDF-ów, nagłówek w stylu rozbitym na dwie kolumny:
+       - `Termin ważności Ilo` (zawiera datę i część całkowitą ilości)
+       - `ść Waga brutto` (zawiera część po przecinku ilości i wagę)
     3. Aplikacja automatycznie:
        - wyciągnie tabelę z PDF-a za pomocą `pdfplumber`,
-       - wyciągnie kolumny EAN (`Kod produktu`) i `Ilość`,
+       - zidentyfikuje sposób zapisu ilości (normalny lub rozbity),
+       - wyciągnie kolumny EAN (`Kod produktu`) i prawidłowo skonstruuje wartość `Ilość`,
        - zsumuje te ilości po EAN-ach,
        - porówna z zamówieniem i wygeneruje raport z różnicą.
     """
@@ -45,9 +49,10 @@ uploaded_wz = st.sidebar.file_uploader(
 
 st.sidebar.markdown(
     """
-    - Jeśli wgrasz **PDF**, aplikacja użyje `pdfplumber` do wyciągnięcia tabeli z kolumnami:
-      `Kod produktu` (EAN) i `Ilość`.  
-    - Jeśli wgrasz **Excel** (plik już wyeksportowany ręcznie ze WZ→.xlsx), 
+    - Jeśli wgrasz **PDF**, aplikacja użyje `pdfplumber` do wyciągnięcia tabeli i 
+      rozpozna, czy kolumna „Ilość” jest od razu dostępna, czy rozbita na dwie części:
+      * „Termin ważności Ilo” (część całkowita) i „ść Waga brutto” (część dziesiętna).  
+    - Jeśli wgrasz **Excel** (plik już wyeksportowany ze WZ→.xlsx), 
       aplikacja odczyta kolumny `Kod produktu` i `Ilość` bezpośrednio.
     """
 )
@@ -74,7 +79,7 @@ if "Symbol" not in df_order.columns or "Ilość" not in df_order.columns:
     )
     st.stop()
 
-# Oczyszczanie EAN-ów i konwersja Ilość
+# Oczyszczanie EAN-ów i konwersja ilości zamówionej na liczbę
 df_order["Symbol"] = (
     df_order["Symbol"]
     .astype(str)
@@ -89,14 +94,14 @@ df_order["Ilość"] = pd.to_numeric(df_order["Ilość"], errors="coerce").fillna
 file_ext = uploaded_wz.name.lower().rsplit(".", maxsplit=1)[-1]
 
 if file_ext == "pdf":
-    # 2a) Ekstrakcja tabeli z PDF przy pomocy pdfplumber
+    # 2a) Ekstrakcja surowych tabel z PDF przy pomocy pdfplumber
     try:
         with pdfplumber.open(uploaded_wz) as pdf:
             all_tables = []
             for page in pdf.pages:
-                table = page.extract_table()
-                if table:
-                    df_page = pd.DataFrame(table[1:], columns=table[0])
+                extracted = page.extract_table()
+                if extracted:
+                    df_page = pd.DataFrame(extracted[1:], columns=extracted[0])
                     all_tables.append(df_page)
     except Exception as e:
         st.error(f"Nie udało się przeczytać PDF-a przez pdfplumber:\n```{e}```")
@@ -106,48 +111,99 @@ if file_ext == "pdf":
         st.error("Nie znaleziono żadnych tabel w pliku PDF WZ.")
         st.stop()
 
+    # Połącz wszystkie strony
     df_wz_raw = pd.concat(all_tables, ignore_index=True)
 
-    # Dopasowanie kolumn "Kod produktu" i "Ilość"
-    col_kod = None
-    for col in df_wz_raw.columns:
-        if "kod" in col.lower() and "produkt" in col.lower():
-            col_kod = col
-            break
+    # Sprawdź nagłówki w df_wz_raw.columns
+    cols = list(df_wz_raw.columns)
 
-    col_ilosc = None
-    for col in df_wz_raw.columns:
-        if "ilo" in col.lower():
-            col_ilosc = col
-            break
+    # Jeśli w nagłówkach jest bezpośrednio 'Ilość', użyjemy tej kolumny
+    if any(col.lower().strip() == "ilość" or col.lower().strip() == "ilość " for col in cols):
+        # Znajdź dokładną nazwę kolumny, która to 'Ilość'
+        col_qty = next(col for col in cols if col.lower().strip().startswith("ilość"))
+        col_ean = next((col for col in cols if "kod" in col.lower() and "produkt" in col.lower()), None)
+        if col_ean is None:
+            st.error(
+                "Nie znaleziono kolumny 'Kod produktu' w pliku PDF WZ.\n"
+                f"Znalezione nagłówki: {cols}"
+            )
+            st.stop()
 
-    if col_kod is None or col_ilosc is None:
-        st.error(
-            "Po ekstrakcji PDF nie udało się odnaleźć kolumn:\n"
-            "- `Kod produktu` (EAN)\n"
-            "- `Ilość`\n\n"
-            f"A zostały znalezione kolumny: {list(df_wz_raw.columns)}"
+        # Przygotuj DataFrame tylko z tych dwóch kolumn
+        df_wz = pd.DataFrame({
+            "Symbol": df_wz_raw[col_ean].astype(str),
+            "Ilość_WZ": df_wz_raw[col_qty]
+        })
+
+        # Oczyść EAN i skonwertuj ilość na liczbę
+        df_wz["Symbol"] = (
+            df_wz["Symbol"]
+            .str.strip()
+            .str.replace(r"\.0+$", "", regex=True)
         )
-        st.stop()
+        df_wz["Ilość_WZ"] = (
+            df_wz["Ilość_WZ"]
+            .astype(str)
+            .str.replace(",", ".", regex=False)
+            .str.replace(r"\s+", "", regex=True)
+        )
+        df_wz["Ilość_WZ"] = pd.to_numeric(df_wz["Ilość_WZ"], errors="coerce").fillna(0)
 
-    df_wz = pd.DataFrame({
-        "Symbol": df_wz_raw[col_kod].astype(str),
-        "Ilość_WZ": df_wz_raw[col_ilosc]
-    })
+    else:
+        # Zakładamy strukturę „rozbitą”:
+        # Nagłówki: np. ['','Kod produktu','Nazwa','Termin ważności Ilo','ść Waga brutto']
+        # Znajdź: kolumnę z 'Termin' i 'Ilo' (część całkowita), oraz kolumnę z 'Waga' (część dziesiętna)
+        col_part_int = next(
+            (col for col in cols if "termin" in col.lower() and "ilo" in col.lower()),
+            None
+        )
+        col_part_dec = next(
+            (col for col in cols if "waga" in col.lower()),
+            None
+        )
+        col_ean = next((col for col in cols if "kod" in col.lower() and "produkt" in col.lower()), None)
 
-    # Oczyszczanie Symbol i konwersja Ilość_WZ na liczbę
-    df_wz["Symbol"] = (
-        df_wz["Symbol"]
-        .str.strip()
-        .str.replace(r"\.0+$", "", regex=True)
-    )
-    df_wz["Ilość_WZ"] = (
-        df_wz["Ilość_WZ"]
-        .astype(str)
-        .str.replace(",", ".", regex=False)
-        .str.replace(r"\s+", "", regex=True)
-    )
-    df_wz["Ilość_WZ"] = pd.to_numeric(df_wz["Ilość_WZ"], errors="coerce").fillna(0)
+        if col_part_int is None or col_part_dec is None or col_ean is None:
+            st.error(
+                "Nie udało się dopasować rozbitej struktury kolumn w PDF WZ.\n"
+                "Spodziewane kolumny: 'Kod produktu', 'Termin ważności Ilo', 'ść Waga brutto'.\n"
+                f"Znalezione nagłówki: {cols}"
+            )
+            st.stop()
+
+        # Teraz rekonstruujemy ilość w każdym wierszu:
+        eans = []
+        ilosci = []
+        for _, row in df_wz_raw.iterrows():
+            ean_raw = str(row[col_ean]).strip()
+            if ean_raw == "" or pd.isna(ean_raw):
+                continue
+            # Część całkowita: ostatni token kolumny col_part_int (po dacie)
+            part_int_cell = str(row[col_part_int])
+            part_int_tokens = part_int_cell.strip().split()
+            if len(part_int_tokens) < 2:
+                # jeśli nie ma nic po dacie, załóż 0
+                int_part = "0"
+            else:
+                raw_int = part_int_tokens[-1]
+                int_part = raw_int.replace(",", "").strip()  # np. '150' lub '90,' → '150'/'90'
+            # Część dziesiętna: pierwszy token kolumny col_part_dec (np. ',00 37,50' → ',00')
+            part_dec_cell = str(row[col_part_dec])
+            dec_token = part_dec_cell.strip().split()[0]  # np. ',00'
+            dec_part = dec_token.replace(".", "").strip()  # nie powinno mieć kropki
+            # Pełny string ilości, np. '150,00'
+            qty_str = f"{int_part},{dec_part.lstrip(',')}" if dec_part.startswith(",") else f"{int_part},{dec_part}"
+            # Zamiana na liczby (kropka = separator dziesiętny)
+            qty_num = pd.to_numeric(qty_str.replace(",", "."), errors="coerce")
+            if pd.isna(qty_num):
+                qty_num = 0
+            eans.append(ean_raw)
+            ilosci.append(qty_num)
+
+        df_wz = pd.DataFrame({
+            "Symbol": eans,
+            "Ilość_WZ": ilosci
+        })
 
 else:
     # 2b) Użytkownik wgrał gotowy Excel z WZ
@@ -166,15 +222,14 @@ else:
         )
         st.stop()
 
+    # Zmień nazwy, oczyść i skonwertuj
     df_wz = df_wz_raw.rename(columns={"Kod produktu": "Symbol", "Ilość": "Ilość_WZ"})
-
     df_wz["Symbol"] = (
         df_wz["Symbol"]
         .astype(str)
         .str.strip()
         .str.replace(r"\.0+$", "", regex=True)
     )
-
     df_wz["Ilość_WZ"] = (
         df_wz["Ilość_WZ"]
         .astype(str)
@@ -250,7 +305,6 @@ def to_excel(df: pd.DataFrame) -> bytes:
     output = BytesIO()
     writer = pd.ExcelWriter(output, engine="openpyxl")
     df.to_excel(writer, index=False, sheet_name="Porównanie")
-    # zamiast writer.save() używamy writer.close()
     writer.close()
     return output.getvalue()
 
