@@ -84,12 +84,18 @@ except Exception as e:
 # Synonimy dla kolumny EAN w zamówieniu
 synonyms_ean_order = {
     col.lower().replace(" ", "").replace("_", ""): col
-    for col in ["Symbol", "symbol", "kod ean", "kod_ean", "ean", "kod produktu", "kod_produktu"]
+    for col in [
+        "Symbol", "symbol", "kod ean", "kod_ean",
+        "ean", "kod produktu", "kod_produktu"
+    ]
 }
 # Synonimy dla kolumny Ilość w zamówieniu
 synonyms_qty_order = {
     col.lower().replace(" ", "").replace("_", ""): col
-    for col in ["Ilość", "Ilosc", "ilosc", "Quantity", "quantity", "Qty", "qty", "sztuki", "sztuka"]
+    for col in [
+        "Ilość", "Ilosc", "ilosc", "Quantity",
+        "quantity", "Qty", "qty", "sztuki", "sztuka"
+    ]
 }
 
 def find_column_by_synonyms(df: pd.DataFrame, synonyms: dict):
@@ -109,8 +115,9 @@ col_qty_order = find_column_by_synonyms(df_order_raw, synonyms_qty_order)
 
 if col_ean_order is None or col_qty_order is None:
     st.error(
-        "Excel z zamówieniem musi zawierać kolumnę z EAN-em (np. `Symbol`, `kod ean`, `ean`) "
-        "oraz kolumnę z ilością (np. `Ilość`, `quantity`, `qty`, `sztuki`).\n"
+        "Excel z zamówieniem musi zawierać kolumnę z EAN-em "
+        "(np. `Symbol`, `kod ean`, `ean`) oraz kolumnę z ilością "
+        "(np. `Ilość`, `quantity`, `qty`, `sztuki`).\n"
         f"Znalezione nagłówki: {list(df_order_raw.columns)}"
     )
     st.stop()
@@ -137,25 +144,32 @@ if extension == "pdf":
             # Synonimy dla kolumny EAN w WZ
             synonyms_ean_wz = {
                 col.lower().replace(" ", "").replace("_", ""): col
-                for col in ["Kod produktu", "kod produktu", "kod_produktu", "EAN", "ean", "symbol"]
+                for col in [
+                    "Kod produktu", "kod produkt", "kod_produktu",
+                    "EAN", "ean", "symbol"
+                ]
             }
             # Synonimy dla kolumny Ilość w WZ (bez rozbicia)
             synonyms_qty_wz = {
                 col.lower().replace(" ", "").replace("_", ""): col
-                for col in ["Ilość", "Ilosc", "ilosc", "Quantity", "quantity", "Qty", "qty"]
+                for col in [
+                    "Ilość", "Ilosc", "ilosc",
+                    "Quantity", "quantity", "Qty", "qty"
+                ]
             }
 
             def parse_wz_table(df_table: pd.DataFrame):
                 """
                 Zidentyfikuje w df_table:
-                - właściwą kolumnę EAN (przez synonimy w synonyms_ean_wz)
-                - właściwą kolumnę Ilość (przez synonimy w synonyms_qty_wz),
-                  albo jeśli jej nie ma – rozbije po 'Termin ważności Ilo' + 'ść Waga brutto'.
-                Pominie każdy wiersz, gdzie ean != 13 cyfr.
+                - kolumnę EAN (przez synonimy w synonyms_ean_wz)
+                - kolumnę Ilość (przez synonimy w synonyms_qty_wz),
+                  albo jeśli jej nie ma – rozbija ilość z
+                  'Termin ważności Ilo' + 'ść Waga brutto'.
+                Pomija wiersze, w których EAN != 13 cyfr.
                 """
                 cols = list(df_table.columns)
 
-                # Znajdź kolumnę EAN
+                # 1) Znajdź kolumnę EAN
                 col_ean = None
                 for raw_col in cols:
                     key = raw_col.lower().replace(" ", "").replace("_", "")
@@ -163,9 +177,9 @@ if extension == "pdf":
                         col_ean = raw_col
                         break
                 if col_ean is None:
-                    return  # Brak EAN → pomiń
+                    return  # Brak kolumny EAN → pomiń całą tabelę
 
-                # Znajdź „prostą” kolumnę Ilość
+                # 2) Znajdź kolumnę Ilość (jeśli istnieje „prostą”)
                 col_qty = None
                 for raw_col in cols:
                     key = raw_col.lower().replace(" ", "").replace("_", "")
@@ -176,11 +190,13 @@ if extension == "pdf":
                 if col_qty:
                     # Mamy bezpośrednią kolumnę „Ilość”
                     for _, row in df_table.iterrows():
-                        raw_ean = str(row[col_ean]).strip()
-                        if not re.fullmatch(r"\d{13}", raw_ean.split()[-1] if raw_ean else ""):
-                            # jeśli nie 13 cyfr, pomiń
+                        raw_ean_full = str(row[col_ean]).strip()
+                        # Wyciągamy ostatni token (np. "1 4250231536748" → "4250231536748")
+                        last_token = raw_ean_full.split()[-1] if raw_ean_full else ""
+                        # Sprawdź, czy to dokładnie 13 cyfr
+                        if not re.fullmatch(r"\d{13}", last_token):
                             continue
-                        ean = raw_ean.split()[-1]
+                        ean = last_token
 
                         raw_qty = str(row[col_qty]).strip().replace(",", ".").replace(" ", "")
                         try:
@@ -190,7 +206,7 @@ if extension == "pdf":
                         wz_rows.append([ean, qty])
 
                 else:
-                    # Kolumna rozbita: 'Termin ważności Ilo' + 'ść Waga brutto'
+                    # Brak prostej kolumny „Ilość” → zakładamy „Termin ważności Ilo” + „ść Waga brutto”
                     col_part_int = next(
                         (c for c in cols if "termin" in c.lower() and "ilo" in c.lower()),
                         None
@@ -203,28 +219,25 @@ if extension == "pdf":
                         return  # Niepoprawne nagłówki → pomiń
 
                     for _, row in df_table.iterrows():
-                        raw_ean = str(row[col_ean]).strip()
-                        if not re.fullmatch(r"\d{13}", raw_ean.split()[-1] if raw_ean else ""):
+                        raw_ean_full = str(row[col_ean]).strip()
+                        last_token = raw_ean_full.split()[-1] if raw_ean_full else ""
+                        if not re.fullmatch(r"\d{13}", last_token):
                             continue
-                        ean = raw_ean.split()[-1]
+                        ean = last_token
 
-                        # Część całkowita
-                        part_int_cell = str(row[col_part_int]).strip()
-                        tokens_int = part_int_cell.split()
-                        if len(tokens_int) >= 2:
-                            raw_int = tokens_int[-1].replace(",", "").strip()
-                        else:
-                            raw_int = "0"
+                        # --- Nowa, poprawiona metoda wyciągania ilości ---
+                        # 3.1) Z 'Termin ważności Ilo' wyciągamy pierwszą liczbę przed przecinkiem:
+                        part_int_cell = str(row[col_part_int])
+                        m_int = re.search(r"(\d+),", part_int_cell)
+                        raw_int = m_int.group(1) if m_int else "0"
 
-                        # Część dziesiętna
-                        part_dec_cell = str(row[col_part_dec]).strip()
-                        tokens_dec = part_dec_cell.split()
-                        dec_part = tokens_dec[0].replace(".", "").strip() if tokens_dec else "00"
+                        # 3.2) Z 'ść Waga brutto' wyciągamy pierwsze dwie cyfry po przecinku:
+                        part_dec_cell = str(row[col_part_dec])
+                        m_dec = re.search(r",(\d{2})", part_dec_cell)
+                        raw_dec = m_dec.group(1) if m_dec else "00"
 
-                        if dec_part.startswith(","):
-                            qty_str = f"{raw_int}{dec_part}"
-                        else:
-                            qty_str = f"{raw_int},{dec_part}"
+                        # 3.3) Scalamy w formę "3,00" → 3.00
+                        qty_str = f"{raw_int},{raw_dec}"
                         try:
                             qty = float(qty_str.replace(",", "."))
                         except:
@@ -232,7 +245,7 @@ if extension == "pdf":
 
                         wz_rows.append([ean, qty])
 
-            # Przetwarzaj każdą stronę PDF
+            # Przechodzimy po wszystkich stronach PDF-a
             for page in pdf.pages:
                 tables = page.extract_tables()
                 for table in tables:
@@ -248,7 +261,7 @@ if extension == "pdf":
         st.error("Nie znaleziono żadnych danych w PDF WZ.")
         st.stop()
 
-    # Tworzymy DataFrame i sumujemy
+    # Tworzymy DataFrame i sumujemy wszystkie wiersze
     df_wz = pd.DataFrame(wz_rows, columns=["Symbol", "Ilość_WZ"])
     df_wz["Symbol"] = df_wz["Symbol"].astype(str).str.strip()
     df_wz["Ilość_WZ"] = pd.to_numeric(df_wz["Ilość_WZ"], errors="coerce").fillna(0)
@@ -264,12 +277,18 @@ else:
     # Synonimy dla kolumny EAN w WZ
     synonyms_ean_wz = {
         col.lower().replace(" ", "").replace("_", ""): col
-        for col in ["Kod produktu", "kod produktu", "kod_produktu", "EAN", "ean", "symbol"]
+        for col in [
+            "Kod produktu", "kod produkt", "kod_produktu",
+            "EAN", "ean", "symbol"
+        ]
     }
     # Synonimy dla kolumny Ilość w WZ
     synonyms_qty_wz = {
         col.lower().replace(" ", "").replace("_", ""): col
-        for col in ["Ilość", "Ilosc", "ilosc", "Quantity", "quantity", "Qty", "qty"]
+        for col in [
+            "Ilość", "Ilosc", "ilosc",
+            "Quantity", "quantity", "Qty", "qty"
+        ]
     }
 
     col_ean_wz = None
@@ -288,15 +307,17 @@ else:
 
     if col_ean_wz is None or col_qty_wz is None:
         st.error(
-            "Excel WZ musi zawierać kolumnę z EAN-em (np. `Kod produktu`, `EAN`, `symbol`) "
-            "oraz kolumnę z ilością (np. `Ilość`, `quantity`, `qty`).\n"
+            "Excel WZ musi zawierać kolumnę z EAN-em "
+            "(np. `Kod produktu`, `EAN`, `symbol`) oraz kolumnę z ilością "
+            "(np. `Ilość`, `quantity`, `qty`).\n"
             f"Znalezione nagłówki: {list(df_wz_raw.columns)}"
         )
         st.stop()
 
-    # Dodatkowo sprawdźmy, czy kolumna EAN zawiera realne 13 cyfr. Jeżeli nie, pominąć taki wiersz.
+    # Dodatkowo sprawdźmy, czy ean to dokładnie 13 cyfr
     tmp_sym = df_wz_raw[col_ean_wz].astype(str).str.strip().str.split().str[-1]
     mask_valid_ean = tmp_sym.str.fullmatch(r"\d{13}")
+
     df_wz = pd.DataFrame({
         "Symbol": tmp_sym[mask_valid_ean],
         "Ilość_WZ": pd.to_numeric(
@@ -360,7 +381,6 @@ df_compare = df_compare.sort_values(["Status", "Symbol"])
 # =============================================================================
 st.markdown("### 📊 Wynik porównania")
 
-# Styler z formatowaniem liczb i zastosowaniem highlight_status_row
 styled = (
     df_compare
     .style
@@ -374,7 +394,6 @@ styled = (
 
 st.dataframe(styled, use_container_width=True)
 
-# Przycisk do pobrania raportu
 def to_excel(df: pd.DataFrame) -> bytes:
     output = BytesIO()
     writer = pd.ExcelWriter(output, engine="openpyxl")
