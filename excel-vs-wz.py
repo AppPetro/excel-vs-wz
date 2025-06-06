@@ -18,8 +18,8 @@ st.markdown(
        - EAN: `Symbol`, `symbol`, `kod ean`, `kod_ean`, `ean`, `kod produktu`, `kod_produktu`
        - Ilość: `Ilość`, `Ilosc`, `ilosc`, `Quantity`, `quantity`, `Qty`, `qty`, `sztuki`, `sztuka`
     2. Wgraj WZ w formie **PDF** (lub Excel), gdzie kolumna EAN może się nazywać:
-       - `Kod produktu`, `kod produktu`, `kod_produktu`, `EAN`, `ean`, `symbol`
-       - Kolumna ilości może nazywać się: `Ilość`, `Ilosc`, `ilosc`, `Quantity`, `quantity`, `Qty`, `qty`
+       - `Kod produktu`, `kod produkt`, `kod_produktu`, `EAN`, `ean`, `symbol`
+       - Kolumna ilości może się nazywać: `Ilość`, `Ilosc`, `ilosc`, `Quantity`, `quantity`, `Qty`, `qty`
     3. Aplikacja:
        - rozpozna synonimy kolumn w obu plikach,
        - z PDF → każdej stronie wyciągnie tabelę przez `extract_tables()` i „napasuje” kolumny EAN + Ilość (lub odtworzy rozbitą ilość),
@@ -177,7 +177,7 @@ if extension == "pdf":
                         col_ean = raw_col
                         break
                 if col_ean is None:
-                    return  # Brak kolumny EAN → pomiń całą tabelę
+                    return  # Brak kolumny EAN → pomiń tabelę
 
                 # 2) Znajdź kolumnę Ilość (jeśli istnieje „prostą”)
                 col_qty = None
@@ -191,9 +191,7 @@ if extension == "pdf":
                     # Mamy bezpośrednią kolumnę „Ilość”
                     for _, row in df_table.iterrows():
                         raw_ean_full = str(row[col_ean]).strip()
-                        # Wyciągamy ostatni token (np. "1 4250231536748" → "4250231536748")
                         last_token = raw_ean_full.split()[-1] if raw_ean_full else ""
-                        # Sprawdź, czy to dokładnie 13 cyfr
                         if not re.fullmatch(r"\d{13}", last_token):
                             continue
                         ean = last_token
@@ -206,7 +204,8 @@ if extension == "pdf":
                         wz_rows.append([ean, qty])
 
                 else:
-                    # Brak prostej kolumny „Ilość” → zakładamy „Termin ważności Ilo” + „ść Waga brutto”
+                    # 3) Brak prostej kolumny „Ilość” → używamy:
+                    #    'Termin ważności Ilo' + 'ść Waga brutto'
                     col_part_int = next(
                         (c for c in cols if "termin" in c.lower() and "ilo" in c.lower()),
                         None
@@ -225,18 +224,18 @@ if extension == "pdf":
                             continue
                         ean = last_token
 
-                        # --- Nowa, poprawiona metoda wyciągania ilości ---
-                        # 3.1) Z 'Termin ważności Ilo' wyciągamy pierwszą liczbę przed przecinkiem:
+                        # --- Poprawione wyciąganie ilości ---
+                        # 3.1) Z 'Termin ważności Ilo' wyciągamy ostatnią liczbę (ciąg cyfr) na końcu:
                         part_int_cell = str(row[col_part_int])
-                        m_int = re.search(r"(\d+),", part_int_cell)
+                        m_int = re.search(r"(\d+),?$", part_int_cell)
                         raw_int = m_int.group(1) if m_int else "0"
 
-                        # 3.2) Z 'ść Waga brutto' wyciągamy pierwsze dwie cyfry po przecinku:
+                        # 3.2) Z 'ść Waga brutto' wyciągamy pierwsze dwie cyfry po przecinku
                         part_dec_cell = str(row[col_part_dec])
-                        m_dec = re.search(r",(\d{2})", part_dec_cell)
+                        m_dec = re.search(r"^,?(\d{2})", part_dec_cell)
                         raw_dec = m_dec.group(1) if m_dec else "00"
 
-                        # 3.3) Scalamy w formę "3,00" → 3.00
+                        # 3.3) Scal w formę "3,00" → float 3.0
                         qty_str = f"{raw_int},{raw_dec}"
                         try:
                             qty = float(qty_str.replace(",", "."))
@@ -314,7 +313,7 @@ else:
         )
         st.stop()
 
-    # Dodatkowo sprawdźmy, czy ean to dokładnie 13 cyfr
+    # Filtrujemy tylko wiersze z 13-cyfrowym EAN-em
     tmp_sym = df_wz_raw[col_ean_wz].astype(str).str.strip().str.split().str[-1]
     mask_valid_ean = tmp_sym.str.fullmatch(r"\d{13}")
 
