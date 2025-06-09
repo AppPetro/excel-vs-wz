@@ -237,9 +237,13 @@ if extension == "pdf":
                         raw_int = m_int.group(1) if m_int else "0"
 
                         # 3.2) Z 'ść Waga brutto' wyciągamy pierwsze dwie cyfry po przecinku
-                        part_dec_cell = str(row[col_part_dec])
-                        m_dec = re.search(r",(\d{2})", part_dec_cell)
-                        raw_dec = m_dec.group(1) if m_dec else "00"
+                        # nowy kod – bierzemy pierwszą "token” (pierwszą liczbę) z komórki,
+# dzięki czemu ignorujemy wagę brutto i złapiemy poprawne “00”
+part_dec_cell = str(row[col_part_dec]).strip()
+first_token = part_dec_cell.split()[0] if part_dec_cell.split() else ""
+m_dec = re.search(r"(\d+)", first_token)
+raw_dec = m_dec.group(1).zfill(2) if m_dec else "00"
+
 
                         # 3.3) Scal w "X,YY" → float
                         qty_str = f"{raw_int},{raw_dec}"
