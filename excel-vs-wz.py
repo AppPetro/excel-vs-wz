@@ -24,7 +24,7 @@ st.markdown(
        - rozpozna synonimy kolumn,
        - z PDF → przeprocesuje `extract_tables()`,
        - zsumuje po EAN-ach i porówna z zamówieniem,
-       - wyświetli tabelę i pozwoli pobrać wynik.
+       - wyświetli tabelę z kolorowaniem i pozwoli pobrać wynik.
     """
 )
 
@@ -95,12 +95,12 @@ if extension == "pdf":
             def parse_wz_table(df_table: pd.DataFrame):
                 cols = list(df_table.columns)
 
-                # --- EAN ---
+                # 1) EAN
                 col_ean = next((c for c in cols if normalize_col_name(c) in syn_ean_wz), None)
                 if not col_ean:
                     return
 
-                # --- Ilość (prosta kolumna) ---
+                # 2) Ilość – prosta kolumna
                 col_qty = next((c for c in cols if normalize_col_name(c) in syn_qty_wz), None)
                 if col_qty:
                     for _, row in df_table.iterrows():
@@ -115,7 +115,7 @@ if extension == "pdf":
                         wz_rows.append([raw_ean, qty])
                     return
 
-                # --- Broken header: "Termin ważności Ilość" + "Waga brutto" ---
+                # 3) Broken header: "Termin ważności Ilość" + "Waga brutto"
                 col_part_int = None
                 col_part_dec = None
                 for rc in cols:
@@ -131,15 +131,14 @@ if extension == "pdf":
                     raw_ean = str(row[col_ean]).strip().split()[-1]
                     if not re.fullmatch(r"\d{13}", raw_ean):
                         continue
-                    # część całkowita
-                    part_int = str(row[col_part_int])
-                    m = re.search(r"(\d+),?$", part_int)
-                    raw_int = m.group(1) if m else "0"
-                    # ignorujemy wagę jako część dziesiętną
+                    # wyciągamy część całkowitą z ostatniego tokenu
+                    part_cell = str(row[col_part_int]).strip()
+                    token = part_cell.split()[-1] if part_cell.split() else ""
+                    raw_int = token.split(",")[0] if token else "0"
+                    # zawsze zerujemy część dziesiętną
                     raw_dec = "00"
-                    qty_str = f"{raw_int},{raw_dec}"
                     try:
-                        qty = float(qty_str.replace(",","."))
+                        qty = float(f"{raw_int}.{raw_dec}")
                     except:
                         qty = 0.0
                     wz_rows.append([raw_ean, qty])
@@ -150,33 +149,29 @@ if extension == "pdf":
                 for table in tables:
                     if not table or len(table) < 2:
                         continue
-
                     hdr0 = table[0]
                     hdr1 = table[1]
                     norm0 = [normalize_col_name(str(x)) for x in hdr0]
                     norm1 = [normalize_col_name(str(x)) for x in hdr1]
 
-                    pure0 = any(k in syn_qty_wz for k in norm0)
-                    pure1 = any(k in syn_qty_wz for k in norm1)
                     has_ean0 = any(k in syn_ean_wz for k in norm0)
+                    has_qty0 = any(k in syn_qty_wz for k in norm0)
                     has_ean1 = any(k in syn_ean_wz for k in norm1)
-                    broken0 = any("termin" in n and "ilo" in n for n in norm0) and any("waga" in n for n in norm0)
-                    broken1 = any("termin" in n and "ilo" in n for n in norm1) and any("waga" in n for n in norm1)
+                    has_qty1 = any(k in syn_qty_wz for k in norm1)
 
-                    if has_ean0 and pure0:
+                    if has_ean0 and has_qty0:
                         header, data = hdr0, table[1:]
-                    elif has_ean1 and pure1:
+                    elif has_ean1 and has_qty1:
                         header, data = hdr1, table[2:]
-                    elif has_ean0 and broken0:
+                    elif has_ean0:      # broken header in first row
                         header, data = hdr0, table[1:]
-                    elif has_ean1 and broken1:
+                    elif has_ean1:      # broken header in second row
                         header, data = hdr1, table[2:]
                     else:
                         continue
 
                     if not data:
                         continue
-
                     df_page = pd.DataFrame(data, columns=header)
                     parse_wz_table(df_page)
 
