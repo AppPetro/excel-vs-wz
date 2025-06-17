@@ -1,8 +1,8 @@
 import streamlit as st
 import pandas as pd
 import pdfplumber
-from io import BytesIO
 import re
+from io import BytesIO
 
 st.set_page_config(
     page_title="📋 Porównywarka Zamówienie ↔ WZ (PDF→Excel)",
@@ -100,16 +100,18 @@ if extension == "pdf":
                 if not col_ean:
                     return
 
-                # 2) Ilość – prosta kolumna
+                # 2) Ilość – prosta kolumna (usuwa wszelkie białe znaki przed parsowaniem)
                 col_qty = next((c for c in cols if normalize_col_name(c) in syn_qty_wz), None)
                 if col_qty:
                     for _, row in df_table.iterrows():
                         raw_ean = str(row[col_ean]).strip().split()[-1]
                         if not re.fullmatch(r"\d{13}", raw_ean):
                             continue
-                        raw_qty = str(row[col_qty]).strip().replace(",",".").replace(" ","")
+                        qty_str = str(row[col_qty]).strip()
+                        qty_str = re.sub(r"\s+", "", qty_str)  # usuwa wszystkie spacje, NBSP itd.
+                        qty_str = qty_str.replace(",", ".")   # zamienia przecinek na kropkę
                         try:
-                            qty = float(raw_qty)
+                            qty = float(qty_str)
                         except:
                             qty = 0.0
                         wz_rows.append([raw_ean, qty])
@@ -131,11 +133,9 @@ if extension == "pdf":
                     raw_ean = str(row[col_ean]).strip().split()[-1]
                     if not re.fullmatch(r"\d{13}", raw_ean):
                         continue
-                    # wyciągamy część całkowitą z ostatniego tokenu
                     part_cell = str(row[col_part_int]).strip()
                     token = part_cell.split()[-1] if part_cell.split() else ""
                     raw_int = token.split(",")[0] if token else "0"
-                    # zawsze zerujemy część dziesiętną
                     raw_dec = "00"
                     try:
                         qty = float(f"{raw_int}.{raw_dec}")
@@ -163,9 +163,9 @@ if extension == "pdf":
                         header, data = hdr0, table[1:]
                     elif has_ean1 and has_qty1:
                         header, data = hdr1, table[2:]
-                    elif has_ean0:      # broken header in first row
+                    elif has_ean0:
                         header, data = hdr0, table[1:]
-                    elif has_ean1:      # broken header in second row
+                    elif has_ean1:
                         header, data = hdr1, table[2:]
                     else:
                         continue
@@ -214,8 +214,7 @@ else:
         "Ilość_WZ": pd.to_numeric(
             df_wz_raw.loc[mask, col_qty_wz]
                 .astype(str)
-                .str.replace(",",".")
-                .str.replace(r"\s+","",regex=True),
+                .apply(lambda x: re.sub(r"\s+", "", x).replace(",", ".")),
             errors="coerce"
         ).fillna(0)
     })
