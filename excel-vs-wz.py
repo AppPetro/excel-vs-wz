@@ -101,7 +101,7 @@ if extension == "pdf":
                         raw_ean = str(row[col_ean]).strip().split()[-1]
                         if not re.fullmatch(r"\d{13}", raw_ean):
                             continue
-                        raw_qty = str(row[col_qty]).strip().replace(",",".").replace(" ","")
+                        raw_qty = str(row[col_qty]).strip().replace(" ", "").replace(",", ".")
                         try:
                             qty = float(raw_qty)
                         except:
@@ -121,21 +121,23 @@ if extension == "pdf":
                 if not col_part_int or not col_part_dec:
                     return
 
-                # Poprawiona logika parsowania ilości:
+                # Oryginalna logika parsowania ilości z kolumny po dacie
                 for _, row in df_table.iterrows():
                     raw_ean = str(row[col_ean]).strip().split()[-1]
                     if not re.fullmatch(r"\d{13}", raw_ean):
                         continue
-                    # Wczytujemy całą wartość ilości, usuwając separatory tysięcy i zamieniając przecinek
                     part_cell = str(row[col_part_int]).strip()
-                    part_clean = part_cell.replace(" ", "").replace(",", ".")
+                    tokens = part_cell.split()
+                    token = tokens[-1] if tokens else ""
+                    raw_int = token.split(",")[0] if token else "0"
+                    raw_dec = "00"
                     try:
-                        qty = float(part_clean)
+                        qty = float(f"{raw_int}.{raw_dec}")
                     except:
                         qty = 0.0
                     wz_rows.append([raw_ean, qty])
 
-            # Wybór właściwego wiersza nagłówka i przetwarzanie tabel
+            # Przetwarzanie tabel
             for page in pdf.pages:
                 tables = page.extract_tables()
                 for table in tables:
@@ -214,49 +216,4 @@ else:
 
 # 4) Grupowanie i sumowanie
 df_ord_g = df_order.groupby("Symbol", as_index=False).agg({"Ilość":"sum"}).rename(columns={"Ilość":"Zamówiona_ilość"})
-df_wz_g  = df_wz.groupby("Symbol",   as_index=False).agg({"Ilość_WZ":"sum"}).rename(columns={"Ilość_WZ":"Wydana_ilość"})
-
-# 5) Porównanie
-df_cmp = pd.merge(df_ord_g, df_wz_g, on="Symbol", how="outer", indicator=True)
-df_cmp["Zamówiona_ilość"] = df_cmp["Zamówiona_ilość"].fillna(0)
-df_cmp["Wydana_ilość"]    = df_cmp["Wydana_ilość"].fillna(0)
-df_cmp["Różnica"]         = df_cmp["Zamówiona_ilość"] - df_cmp["Wydana_ilość"]
-
-def status(r):
-    if r["_merge"]=="left_only":   return "Brak we WZ"
-    if r["_merge"]=="right_only":  return "Brak w zamówieniu"
-    return "OK" if r["Różnica"]==0 else "Różni się"
-
-df_cmp["Status"] = df_cmp.apply(status, axis=1)
-order_stats = ["Różni się","Brak we WZ","Brak w zamówieniu","OK"]
-df_cmp["Status"] = pd.Categorical(df_cmp["Status"], categories=order_stats, ordered=True)
-df_cmp = df_cmp.sort_values(["Status","Symbol"])
-
-# 6) Wyświetlenie i eksport
-st.markdown("### 📊 Wynik porównania")
-styled = (
-    df_cmp.style
-          .format({"Zamówiona_ilość":"{:.0f}","Wydana_ilość":"{:.0f}","Różnica":"{:.0f}"})
-          .apply(highlight_status_row, axis=1)
-)
-st.dataframe(styled, use_container_width=True)
-
-def to_excel(df):
-    out = BytesIO()
-    writer = pd.ExcelWriter(out, engine="openpyxl")
-    df.to_excel(writer, index=False, sheet_name="Porównanie")
-    writer.close()
-    return out.getvalue()
-
-st.download_button(
-    "⬇️ Pobierz raport Excel",
-    data=to_excel(df_cmp),
-    file_name="porownanie_order_vs_wz.xlsx",
-    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-)
-
-all_ok = (df_cmp["Status"]=="OK").all()
-if all_ok:
-    st.markdown("<h4 style='color:green;'>✅ Pozycje się zgadzają</h4>", unsafe_allow_html=True)
-else:
-    st.markdown("<h4 style='color:red;'>❌ Pozycje się nie zgadzają</h4>", unsafe_allow_html=True)
+df_wz_g  = df_wz.groupby("Symbol",   as_index=False).agg({"Ilość_WZ":"sum"}).rename(columns
