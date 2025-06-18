@@ -35,9 +35,7 @@ def highlight_status_row(row):
 def normalize_col_name(name: str) -> str:
     return name.lower().replace(" ", "").replace("\xa0", "").replace("_", "")
 
-# -------------------------
 # 1) Wgrywanie plików
-# -------------------------
 st.sidebar.header("Krok 1: Excel (zamówienie)")
 uploaded_order = st.sidebar.file_uploader("Wybierz plik zamówienia", type=["xlsx"])
 st.sidebar.header("Krok 2: WZ (PDF lub Excel)")
@@ -47,9 +45,7 @@ if not uploaded_order or not uploaded_wz:
     st.info("Proszę wgrać oba pliki: Excel (zamówienie) oraz PDF/Excel (WZ).")
     st.stop()
 
-# -------------------------
 # 2) Parsowanie zamówienia
-# -------------------------
 try:
     df_order_raw = pd.read_excel(uploaded_order, dtype=str)
 except Exception as e:
@@ -79,9 +75,7 @@ df_order = pd.DataFrame({
     "Ilość": pd.to_numeric(df_order_raw[col_qty_order], errors="coerce").fillna(0)
 })
 
-# -------------------------
 # 3) Parsowanie WZ
-# -------------------------
 extension = uploaded_wz.name.lower().rsplit(".",1)[-1]
 
 if extension == "pdf":
@@ -127,23 +121,21 @@ if extension == "pdf":
                 if not col_part_int or not col_part_dec:
                     return
 
+                # Poprawiona logika parsowania ilości:
                 for _, row in df_table.iterrows():
                     raw_ean = str(row[col_ean]).strip().split()[-1]
                     if not re.fullmatch(r"\d{13}", raw_ean):
                         continue
-                    # wyciągamy część całkowitą z ostatniego tokenu
+                    # Wczytujemy całą wartość ilości, usuwając separatory tysięcy i zamieniając przecinek
                     part_cell = str(row[col_part_int]).strip()
-                    token = part_cell.split()[-1] if part_cell.split() else ""
-                    raw_int = token.split(",")[0] if token else "0"
-                    # zawsze zerujemy część dziesiętną
-                    raw_dec = "00"
+                    part_clean = part_cell.replace(" ", "").replace(",", ".")
                     try:
-                        qty = float(f"{raw_int}.{raw_dec}")
+                        qty = float(part_clean)
                     except:
                         qty = 0.0
                     wz_rows.append([raw_ean, qty])
 
-            # — wybór właściwego wiersza nagłówka —
+            # Wybór właściwego wiersza nagłówka i przetwarzanie tabel
             for page in pdf.pages:
                 tables = page.extract_tables()
                 for table in tables:
@@ -163,9 +155,9 @@ if extension == "pdf":
                         header, data = hdr0, table[1:]
                     elif has_ean1 and has_qty1:
                         header, data = hdr1, table[2:]
-                    elif has_ean0:      # broken header in first row
+                    elif has_ean0:
                         header, data = hdr0, table[1:]
-                    elif has_ean1:      # broken header in second row
+                    elif has_ean1:
                         header, data = hdr1, table[2:]
                     else:
                         continue
@@ -215,20 +207,16 @@ else:
             df_wz_raw.loc[mask, col_qty_wz]
                 .astype(str)
                 .str.replace(",",".")
-                .str.replace(r"\s+","",regex=True),
+                .str.replace(r"\s+", "", regex=True),
             errors="coerce"
         ).fillna(0)
     })
 
-# -------------------------
 # 4) Grupowanie i sumowanie
-# -------------------------
 df_ord_g = df_order.groupby("Symbol", as_index=False).agg({"Ilość":"sum"}).rename(columns={"Ilość":"Zamówiona_ilość"})
 df_wz_g  = df_wz.groupby("Symbol",   as_index=False).agg({"Ilość_WZ":"sum"}).rename(columns={"Ilość_WZ":"Wydana_ilość"})
 
-# -------------------------
 # 5) Porównanie
-# -------------------------
 df_cmp = pd.merge(df_ord_g, df_wz_g, on="Symbol", how="outer", indicator=True)
 df_cmp["Zamówiona_ilość"] = df_cmp["Zamówiona_ilość"].fillna(0)
 df_cmp["Wydana_ilość"]    = df_cmp["Wydana_ilość"].fillna(0)
@@ -244,9 +232,7 @@ order_stats = ["Różni się","Brak we WZ","Brak w zamówieniu","OK"]
 df_cmp["Status"] = pd.Categorical(df_cmp["Status"], categories=order_stats, ordered=True)
 df_cmp = df_cmp.sort_values(["Status","Symbol"])
 
-# -------------------------
 # 6) Wyświetlenie i eksport
-# -------------------------
 st.markdown("### 📊 Wynik porównania")
 styled = (
     df_cmp.style
