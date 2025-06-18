@@ -127,14 +127,18 @@ if extension == "pdf":
                         qty = 0.0
                     wz_rows.append([raw_ean, qty])
 
-            for page in pdf.pages:
-                tables = page.extract_tables()
-                for table in tables:
-                    if not table or len(table) < 2:
-                        continue
-                    hdr = table[0]
-                    data = table[1:]
-                    df_page = pd.DataFrame(data, columns=hdr)
+            for page_idx, page in enumerate(pdf.pages):
+    tables = page.extract_tables()
+    for table_idx, table in enumerate(tables):
+        if not table or len(table) < 2:
+            continue
+        hdr = table[0]
+        data = table[1:]
+        df_page = pd.DataFrame(data, columns=hdr)
+        # DEBUG: Wyświetl tabelę przed parsowaniem
+        st.write(f"DEBUG: Page {page_idx+1}, Table {table_idx+1}")
+        st.write(df_page.head())
+        parse_wz_table(df_page)
                     parse_wz_table(df_page)
 
     except Exception as e:
