@@ -40,65 +40,12 @@ df_order_raw = pd.read_excel(file_order, dtype=str)
 syn_ean_ord = {normalize_col(c): c for c in ["Symbol","symbol","kod ean","ean","kod produktu"]}
 syn_qty_ord = {normalize_col(c): c for c in ["ilość","ilosc","quantity","qty","sztuki"]}
 # funkcja wyszukująca
- def find_col(df, syn):
+def find_col(df, syn):
     for c in df.columns:
         if normalize_col(c) in syn:
             return c
     return None
-# znajdź kolumny
-col_ean_ord = find_col(df_order_raw, syn_ean_ord)
-col_qty_ord = find_col(df_order_raw, syn_qty_ord)
-if not col_ean_ord or not col_qty_ord:
-    st.error(f"Brak kolumn EAN lub Ilość w pliku zamówienia. Znalezione: {list(df_order_raw.columns)}")
-    st.stop()
-# budowa df_order
-df_order = pd.DataFrame({
-    "Symbol": df_order_raw[col_ean_ord].astype(str).str.extract(r"(\d{13})")[0],
-    "Zamówiona": df_order_raw[col_qty_ord].astype(str)
-        .str.replace(r"[\s\.]+", "", regex=True)
-        .str.replace(",", ".")
-})
-df_order["Zamówiona"] = pd.to_numeric(df_order["Zamówiona"], errors="coerce").fillna(0)
-df_order = df_order.groupby("Symbol", as_index=False).sum()
-
-# ------------------------------
-# 3) Parsowanie WZ
-# ------------------------------
-syn_ean_wz = syn_ean_ord.copy()
-syn_qty_wz = syn_qty_ord.copy()
-ext = file_wz.name.lower().rsplit('.',1)[-1]
-rows = []
-if ext == "pdf":
-    with pdfplumber.open(file_wz) as pdf:
-        for page in pdf.pages:
-            tables = page.extract_tables() or []
-            for table in tables:
-                if len(table) < 2:
-                    continue
-                header = table[0]
-                # lokalizuj indeksy kolumn EAN i Ilość
-                ean_idx = next((i for i, c in enumerate(header) if normalize_col(c) in syn_ean_wz), None)
-                qty_idx = next((i for i, c in enumerate(header) if normalize_col(c) in syn_qty_wz), None)
-                if ean_idx is None or qty_idx is None:
-                    continue  # pomijaj tabele bez wymaganych kolumn
-                data = table[1:]
-                for row in data:
-                    raw_ean = str(row[ean_idx]).strip()
-                    m = re.search(r"(\d{13})", raw_ean)
-                    if not m:
-                        continue
-                    ean = m.group(1)
-                    raw_qty = str(row[qty_idx]).strip()
-                    # oczyszczanie
-                    clean = raw_qty.replace(" ","").replace("\xa0","").replace(",",".")
-                    try:
-                        qty = float(clean)
-                    except:
-                        qty = 0.0
-                    rows.append((ean, qty))
-else:
-    df_wz_raw = pd.read_excel(file_wz, dtype=str)
-    # znajdź kolumny EAN i ilość
+# znajdź kolumny EAN i ilość
     col_ean_wz = find_col(df_wz_raw, syn_ean_wz)
     col_qty_wz = find_col(df_wz_raw, syn_qty_wz)
     if not col_ean_wz or not col_qty_wz:
