@@ -55,10 +55,11 @@ if ext_order == "pdf":
             for page in pdf.pages:
                 text = page.extract_text() or ""
                 for line in text.split("\n"):
-                    m = re.match(r"\s*\d+\s+(\d{13})\s+.*?\s+([\d\s]+,\d{2})$", line)
+                    # najpierw ilość, potem jednostka, potem EAN
+                    m = re.match(r"\s*\d+\s+.*?\s+([\d\s]+,\d+)\s+\S+\s+(\d{13})", line)
                     if not m:
                         continue
-                    raw_ean, raw_q = m.group(1), m.group(2)
+                    raw_q, raw_ean = m.group(1), m.group(2)
                     raw_qty = raw_q.replace(" ", "").replace(",", ".")
                     try:
                         qty = float(raw_qty)
@@ -187,8 +188,7 @@ def status(r):
     return "OK" if r["Różnica"] == 0 else "Różni się"
 
 order_stats = ["Różni się", "Brak we WZ", "Brak w zamówieniu", "OK"]
-df_cmp["Status"] = df_cmp.apply(status, axis=1)
-df_cmp["Status"] = pd.Categorical(df_cmp["Status"], categories=order_stats, ordered=True)
+df_cmp["Status"] = pd.Categorical(df_cmp.apply(status, axis=1), categories=order_stats, ordered=True)
 df_cmp = df_cmp.sort_values(["Status", "Symbol"])
 
 # Wyświetlenie i eksport
