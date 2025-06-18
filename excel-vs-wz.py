@@ -48,12 +48,7 @@ if not uploaded_order or not uploaded_wz:
     st.stop()
 
 # 2) Parsowanie zamówienia
-try:
-    df_order_raw = pd.read_excel(uploaded_order, dtype=str)
-except Exception as e:
-    st.error(f"Nie udało się wczytać pliku zamówienia:\n```{e}```")
-    st.stop()
-
+df_order_raw = pd.read_excel(uploaded_order, dtype=str)
 syn_ean_ord = { normalize_col_name(c): c for c in ["Symbol","symbol","kod ean","ean","kod produktu"] }
 syn_qty_ord = { normalize_col_name(c): c for c in ["Ilość","Ilosc","Quantity","Qty","sztuki"] }
 
@@ -66,182 +61,92 @@ def find_col(df, syns):
 col_ean_order = find_col(df_order_raw, syn_ean_ord)
 col_qty_order = find_col(df_order_raw, syn_qty_ord)
 if not col_ean_order or not col_qty_order:
-    st.error(
-        "Excel zamówienia musi mieć kolumny EAN i Ilość.\n"
-        f"Znalezione: {list(df_order_raw.columns)}"
-    )
+    st.error(f"Brak kolumn EAN/Ilość w Excelu zamówienia: {list(df_order_raw.columns)}")
     st.stop()
 
 df_order = pd.DataFrame({
-    "Symbol": df_order_raw[col_ean_order].astype(str).str.strip().str.replace(r"\.0+$","",regex=True),
-    "Ilość": pd.to_numeric(df_order_raw[col_qty_order], errors="coerce").fillna(0)
+    "Symbol": df_order_raw[col_ean_order].astype(str).str.extract(r"(\d{13})")[0],
+    "Ilość": pd.to_numeric(df_order_raw[col_qty_order].str.replace(r"\s+","",regex=True), errors="coerce").fillna(0)
 })
 
 # 3) Parsowanie WZ
-extension = uploaded_wz.name.lower().rsplit(".",1)[-1]
+ext = uploaded_wz.name.lower().rsplit(".",1)[-1]
 
-if extension == "pdf":
-    try:
-        with pdfplumber.open(uploaded_wz) as pdf:
-            wz_rows = []
-
-            syn_ean_wz = { normalize_col_name(c): c for c in ["Kod produktu","EAN","symbol"] }
-            syn_qty_wz = { normalize_col_name(c): c for c in ["Ilość","Ilosc","Quantity","Qty"] }
-
-            def parse_wz_table(df_table: pd.DataFrame):
-                cols = list(df_table.columns)
-
-                # 1) EAN
-                col_ean = next((c for c in cols if normalize_col_name(c) in syn_ean_wz), None)
-                if not col_ean:
-                    return
-
-                # 2) Ilość – prosta kolumna
-                col_qty = next((c for c in cols if normalize_col_name(c) in syn_qty_wz), None)
-                if col_qty:
-                    for _, row in df_table.iterrows():
-                        raw_ean = str(row[col_ean]).strip().split()[-1]
-                        if not re.fullmatch(r"\d{13}", raw_ean):
-                            continue
-                        raw_qty = str(row[col_qty]).strip().replace(" ", "").replace("\xa0", "").replace(",", ".")
-                        try:
-                            qty = float(raw_qty)
-                        except:
-                            qty = 0.0
-                        wz_rows.append([raw_ean, qty])
-                    return
-
-                # 3) Broken header: 'Termin ważności Ilość'
-                col_part = next((c for c in cols if "termin" in normalize_col_name(c) and "ilo" in normalize_col_name(c)), None)
-                if not col_part:
-                    return
-
-                for _, row in df_table.iterrows():
-                    raw_ean = str(row[col_ean]).strip().split()[-1]
-                    if not re.fullmatch(r"\d{13}", raw_ean):
-                        continue
-                    part_cell = str(row[col_part]).strip()
-                    part_clean = part_cell.replace(" ", "").replace(",", ".")
+if ext == "pdf":
+    with pdfplumber.open(uploaded_wz) as pdf:
+        wz_rows = []
+        def parse_wz_table(df_table: pd.DataFrame):
+            for _, row in df_table.iterrows():
+                # znajdź EAN 13-cyfrowy
+                raw_ean = None
+                for cell in row:
+                    m = re.search(r"\b(\d{13})\b", str(cell))
+                    if m:
+                        raw_ean = m.group(1)
+                        break
+                if not raw_ean:
+                    continue
+                # znajdź ilość: ostatni występujący format liczba z przecinkiem lub kropką
+                text = " ".join(map(str,row))
+                qtys = re.findall(r"[\d\s]+[\.,]\d+", text)
+                if qtys:
+                    part = qtys[-1].replace(" ","").replace(",",".")
                     try:
-                        qty = float(part_clean)
+                        qty = float(part)
                     except:
                         qty = 0.0
-                    wz_rows.append([raw_ean, qty])
-
-            # Procesowanie wszystkich tabel z każdej strony
-            for page in pdf.pages:
-                tables = page.extract_tables()
-                for table in tables:
-                    if not table or len(table) < 2:
-                        continue
-                    header = table[0]
-                    data = table[1:]
-                    df_page = pd.DataFrame(data, columns=header)
-                    parse_wz_table(df_page)
-
-    except Exception as e:
-        st.error(f"Nie udało się przetworzyć PDF:\n```{e}```")
-        st.stop()
-
-    if not wz_rows:
-        st.error("Nie znaleziono żadnych danych w PDF WZ.")
-        st.stop()
-
-    df_wz = pd.DataFrame(wz_rows, columns=["Symbol","Ilość_WZ"])
-    df_wz["Symbol"] = df_wz["Symbol"].astype(str).str.strip()
-    df_wz["Ilość_WZ"] = pd.to_numeric(df_wz["Ilość_WZ"], errors="coerce").fillna(0)
-
+                else:
+                    qty = 0.0
+                wz_rows.append([raw_ean, qty])
+        for page in pdf.pages:
+            for table in page.extract_tables():
+                if not table or len(table)<2:
+                    continue
+                df_page = pd.DataFrame(table[1:], columns=table[0])
+                parse_wz_table(df_page)
+    df_wz = pd.DataFrame(wz_rows, columns=["Symbol","Ilość_WZ"]).groupby("Symbol",as_index=False).sum()
 else:
-    # Excelowy WZ
-    try:
-        df_wz_raw = pd.read_excel(uploaded_wz, dtype=str)
-    except Exception as e:
-        st.error(f"Nie udało się wczytać Excela WZ:\n```{e}```")
-        st.stop()
-
-    syn_ean_wz = { normalize_col_name(c): c for c in ["Kod produktu","EAN","symbol"] }
-    syn_qty_wz = { normalize_col_name(c): c for c in ["Ilość","Ilosc","Quantity","Qty"] }
-
-    col_ean_wz = next((c for c in df_wz_raw.columns if normalize_col_name(c) in syn_ean_wz), None)
-    col_qty_wz = next((c for c in df_wz_raw.columns if normalize_col_name(c) in syn_qty_wz), None)
-    if not col_ean_wz or not col_qty_wz:
-        st.error(
-            "Excel WZ musi mieć kolumny EAN i Ilość.\n"
-            f"Znalezione: {list(df_wz_raw.columns)}"
-        )
-        st.stop()
-
-    tmp = df_wz_raw[col_ean_wz].astype(str).str.strip().str.split().str[-1]
-    mask = tmp.str.fullmatch(r"\d{13}")
+    df_wz_raw = pd.read_excel(uploaded_wz, dtype=str)
     df_wz = pd.DataFrame({
-        "Symbol": tmp[mask],
-        "Ilość_WZ": pd.to_numeric(
-            df_wz_raw.loc[mask, col_qty_wz]
-                .astype(str)
-                .str.replace(",",".")
-                .str.replace(r"\s+","", regex=True),
-            errors="coerce"
-        ).fillna(0)
+        "Symbol": df_wz_raw.apply(lambda r: re.search(r"(\d{13})", r.to_string()) and re.search(r"(\d{13})", r.to_string()).group(1), axis=1)
     })
+    df_wz["Ilość_WZ"] = pd.to_numeric(df_wz_raw.apply(
+        lambda r: next(iter(re.findall(r"[\d\s]+[\.,]\d+", r.to_string())),"0").replace(" ","").replace(",","."), axis=1
+    ), errors="coerce").fillna(0)
+    df_wz = df_wz.groupby("Symbol",as_index=False).sum()
 
-# 4) Grupowanie, porównanie i wyświetlenie
-# Grupujemy i sumujemy wartości z obu źródeł po EAN
-df_ord_g = df_order.groupby("Symbol", as_index=False).agg({"Ilość":"sum"}).rename(columns={"Ilość":"Zamówiona_ilość"})
-df_wz_g  = df_wz.groupby("Symbol",   as_index=False).agg({"Ilość_WZ":"sum"}).rename(columns={"Ilość_WZ":"Wydana_ilość"})
+# 4) Porównanie
+df_cmp = pd.merge(df_order.groupby("Symbol",as_index=False).sum().rename(columns={"Ilość":"Zamówiona"}),
+                  df_wz.rename(columns={"Ilość_WZ":"Wydana"}), on="Symbol", how="outer", indicator=True)
+df_cmp.fillna({"Zamówiona":0,"Wydana":0}, inplace=True)
+df_cmp["Różnica"] = df_cmp["Zamówiona"] - df_cmp["Wydana"]
 
-# Łączymy dane z obu tabel
-df_cmp = pd.merge(df_ord_g, df_wz_g, on="Symbol", how="outer", indicator=True)
-# Wypełniamy brakujące ilości zerami
-df_cmp["Zamówiona_ilość"] = df_cmp["Zamówiona_ilość"].fillna(0)
-df_cmp["Wydana_ilość"]    = df_cmp["Wydana_ilość"].fillna(0)
-# Obliczamy różnicę
-df_cmp["Różnica"]         = df_cmp["Zamówiona_ilość"] - df_cmp["Wydana_ilość"]
+# status
+def stat(r):
+    if r["_merge"]=="left_only": return "Brak we WZ"
+    if r["_merge"]=="right_only": return "Brak w zamówieniu"
+    return "OK" if r["Różnica"]==0 else "Różni się"
 
-# Określamy status każdej pozycji
-def status(row):
-    if row["_merge"] == "left_only":
-        return "Brak we WZ"
-    if row["_merge"] == "right_only":
-        return "Brak w zamówieniu"
-    return "OK" if row["Różnica"] == 0 else "Różni się"
+df_cmp["Status"] = df_cmp.apply(stat, axis=1)
+order = ["Różni się","Brak we WZ","Brak w zamówieniu","OK"]
+df_cmp["Status"] = pd.Categorical(df_cmp["Status"], categories=order, ordered=True)
+df_cmp.sort_values(["Status","Symbol"], inplace=True)
 
-df_cmp["Status"] = df_cmp.apply(status, axis=1)
-# Ustalamy porządek statusów
-order_stats = ["Różni się","Brak we WZ","Brak w zamówieniu","OK"]
-df_cmp["Status"] = pd.Categorical(df_cmp["Status"], categories=order_stats, ordered=True)
-# Sortujemy dane
-df_cmp = df_cmp.sort_values(["Status","Symbol"])
+# 5) Wyświetlenie i eksport
+st.markdown("### Wynik porównania")
+st.dataframe(df_cmp.style.format({"Zamówiona":"{:.0f}","Wydana":"{:.0f}","Różnica":"{:.0f}"}).apply(highlight_status_row,axis=1), use_container_width=True)
 
-# 5) Prezentacja wyników
-st.markdown("### 📊 Wynik porównania")
-# Stylowanie tabeli
-styled = (
-    df_cmp.style
-          .format({"Zamówiona_ilość":"{:.0f}",
-                   "Wydana_ilość":"{:.0f}",
-                   "Różnica":"{:.0f}"})
-          .apply(highlight_status_row, axis=1)
-)
-st.dataframe(styled, use_container_width=True)
-
-# 6) Eksport do Excela
 def to_excel(df):
-    out = BytesIO()
-    writer = pd.ExcelWriter(out, engine="openpyxl")
-    df.to_excel(writer, index=False, sheet_name="Porównanie")
+    buf=BytesIO()
+    writer=pd.ExcelWriter(buf,engine="openpyxl")
+    df.to_excel(writer,index=False,sheet_name="Porównanie")
     writer.close()
-    return out.getvalue()
+    return buf.getvalue()
 
-st.download_button(
-    "⬇️ Pobierz raport Excel",
-    data=to_excel(df_cmp),
-    file_name="porownanie_order_vs_wz.xlsx",
-    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-)
+st.download_button("Pobierz raport",data=to_excel(df_cmp),file_name="raport.xlsx",mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-# 7) Podsumowanie
-all_ok = (df_cmp["Status"] == "OK").all()
-if all_ok:
-    st.markdown("<h4 style='color:green;'>✅ Pozycje się zgadzają</h4>", unsafe_allow_html=True)
+# podsumowanie
+if (df_cmp["Status"]=="OK").all():
+    st.success("Wszystko się zgadza 🎉")
 else:
-    st.markdown("<h4 style='color:red;'>❌ Pozycje się nie zgadzają</h4>", unsafe_allow_html=True)
+    st.error("Są rozbieżności ❌")
