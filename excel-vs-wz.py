@@ -28,6 +28,25 @@ st.markdown(
     """
 )
 
+# Funkcje pomocnicze
+
+def highlight_status_row(row):
+    color = "#c6efce" if row["Status"] == "OK" else "#ffc7ce"
+    return [f"background-color: {color}" for _ in row.index]
+
+
+def normalize_col_name(name: str) -> str:
+    return name.lower().replace(" ", "").replace(" ", "").replace("_", ""), gdzie kolumna EAN może się nazywać:
+       - `Kod produktu`, `EAN`, `symbol`
+       - Ilość: `Ilość`, `Ilosc`, `Quantity`, `Qty`
+    3. Aplikacja:
+       - rozpozna synonimy kolumn,
+       - z PDF → przeprocesuje `extract_tables()`,
+       - zsumuje po EAN-ach i porówna z zamówieniem,
+       - wyświetli tabelę z kolorowaniem i pozwoli pobrać wynik.
+    """
+)
+
 # 1) Wgrywanie plików
 st.sidebar.header("Krok 1: Excel (zamówienie)")
 uploaded_order = st.sidebar.file_uploader("Wybierz plik zamówienia", type=["xlsx"])
