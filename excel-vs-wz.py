@@ -116,6 +116,11 @@ else:
             qty = 0.0
         rows.append((ean, qty))
 # Tworzenie df_wz
+# DEBUG: sprawdzenie wierszy dla EAN 4250231542008
+target_ean = "4250231542008"
+specific_rows = [qty for ean, qty in rows if ean == target_ean]
+st.write(f"DEBUG: wiersze dla {target_ean}: {specific_rows} (suma: {sum(specific_rows)})")
+
 df_wz = pd.DataFrame(rows, columns=["Symbol","Wydana"]).groupby("Symbol", as_index=False).sum()
 if df_wz.empty:
     st.error("Brak danych wyciągniętych z WZ.")
