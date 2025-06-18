@@ -131,16 +131,18 @@ if extension == "pdf":
                     raw_ean = str(row[col_ean]).strip().split()[-1]
                     if not re.fullmatch(r"\d{13}", raw_ean):
                         continue
-                    # wyciągamy część całkowitą z ostatniego tokenu
-                    part_cell = str(row[col_part_int]).strip()
-                    token = part_cell.split()[-1] if part_cell.split() else ""
-                    raw_int = token.split(",")[0] if token else "0"
-                    # zawsze zerujemy część dziesiętną
-                    raw_dec = "00"
-                    try:
-                        qty = float(f"{raw_int}.{raw_dec}")
-                    except:
-                        qty = 0.0
+# — wyciągamy ilość (z separatorem tysięcy i przecinkiem dziesiętnym) na końcu komórki —
+part_cell = str(row[col_part_int]).strip()
+m = re.search(r"([\d\s]+,\d{2})$", part_cell)
+if m:
+    num = m.group(1).replace(" ", "").replace(",", ".")
+    try:
+        qty = float(num)
+    except:
+        qty = 0.0
+else:
+    qty = 0.0
+
                     wz_rows.append([raw_ean, qty])
 
             # — wybór właściwego wiersza nagłówka —
