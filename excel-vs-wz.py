@@ -183,3 +183,63 @@ else:
     })
 
 # 4) Grupowanie, porównanie i wyświetlenie
+# Grupujemy i sumujemy wartości z obu źródeł po EAN
+df_ord_g = df_order.groupby("Symbol", as_index=False).agg({"Ilość":"sum"}).rename(columns={"Ilość":"Zamówiona_ilość"})
+df_wz_g  = df_wz.groupby("Symbol",   as_index=False).agg({"Ilość_WZ":"sum"}).rename(columns={"Ilość_WZ":"Wydana_ilość"})
+
+# Łączymy dane z obu tabel
+df_cmp = pd.merge(df_ord_g, df_wz_g, on="Symbol", how="outer", indicator=True)
+# Wypełniamy brakujące ilości zerami
+df_cmp["Zamówiona_ilość"] = df_cmp["Zamówiona_ilość"].fillna(0)
+df_cmp["Wydana_ilość"]    = df_cmp["Wydana_ilość"].fillna(0)
+# Obliczamy różnicę
+df_cmp["Różnica"]         = df_cmp["Zamówiona_ilość"] - df_cmp["Wydana_ilość"]
+
+# Określamy status każdej pozycji
+def status(row):
+    if row["_merge"] == "left_only":
+        return "Brak we WZ"
+    if row["_merge"] == "right_only":
+        return "Brak w zamówieniu"
+    return "OK" if row["Różnica"] == 0 else "Różni się"
+
+df_cmp["Status"] = df_cmp.apply(status, axis=1)
+# Ustalamy porządek statusów
+order_stats = ["Różni się","Brak we WZ","Brak w zamówieniu","OK"]
+df_cmp["Status"] = pd.Categorical(df_cmp["Status"], categories=order_stats, ordered=True)
+# Sortujemy dane
+df_cmp = df_cmp.sort_values(["Status","Symbol"])
+
+# 5) Prezentacja wyników
+st.markdown("### 📊 Wynik porównania")
+# Stylowanie tabeli
+styled = (
+    df_cmp.style
+          .format({"Zamówiona_ilość":"{:.0f}",
+                   "Wydana_ilość":"{:.0f}",
+                   "Różnica":"{:.0f}"})
+          .apply(highlight_status_row, axis=1)
+)
+st.dataframe(styled, use_container_width=True)
+
+# 6) Eksport do Excela
+def to_excel(df):
+    out = BytesIO()
+    writer = pd.ExcelWriter(out, engine="openpyxl")
+    df.to_excel(writer, index=False, sheet_name="Porównanie")
+    writer.close()
+    return out.getvalue()
+
+st.download_button(
+    "⬇️ Pobierz raport Excel",
+    data=to_excel(df_cmp),
+    file_name="porownanie_order_vs_wz.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+)
+
+# 7) Podsumowanie
+all_ok = (df_cmp["Status"] == "OK").all()
+if all_ok:
+    st.markdown("<h4 style='color:green;'>✅ Pozycje się zgadzają</h4>", unsafe_allow_html=True)
+else:
+    st.markdown("<h4 style='color:red;'>❌ Pozycje się nie zgadzają</h4>", unsafe_allow_html=True)
