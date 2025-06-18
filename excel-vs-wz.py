@@ -210,3 +210,8 @@ st.download_button(
     file_name="porownanie.xlsx",
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 )
+# Komunikat o zgodności pozycji
+if df_cmp["Status"].eq("OK").all():
+    st.markdown("<h4 style='color:green;'>✅ Pozycje się zgadzają</h4>", unsafe_allow_html=True)
+else:
+    st.markdown("<h4 style='color:red;'>❌ Pozycje się nie zgadzają</h4>", unsafe_allow_html=True)
