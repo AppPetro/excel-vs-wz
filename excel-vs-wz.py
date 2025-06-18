@@ -69,7 +69,7 @@ df_order = df_order.groupby("Symbol", as_index=False).sum()
 syn_ean_wz = syn_ean_ord.copy()
 syn_qty_wz = syn_qty_ord.copy()
 ext = file_wz.name.lower().rsplit('.', 1)[-1]
-rows = []
+rows: list = []
 
 if ext == "pdf":
     with pdfplumber.open(file_wz) as pdf:
@@ -84,12 +84,12 @@ if ext == "pdf":
                 if ean_idx is None or qty_idx is None:
                     continue
                 for row in table[1:]:
-                    raw_ean = str(row[ean_idx])
+                    raw_ean = str(row[ean_idx]).strip()
                     m = re.search(r"(\d{13})", raw_ean)
                     if not m:
                         continue
                     ean = m.group(1)
-                    raw_qty = str(row[qty_idx])
+                    raw_qty = str(row[qty_idx]).strip()
                     clean = raw_qty.replace(" ", "").replace("\xa0", "").replace(",", ".")
                     try:
                         qty = float(clean)
@@ -104,12 +104,12 @@ else:
         st.error(f"Brak kolumn EAN lub Ilość w pliku WZ. Znalezione: {list(df_wz_raw.columns)}")
         st.stop()
     for _, r in df_wz_raw.iterrows():
-        raw_ean = str(r[col_ean_wz])
+        raw_ean = str(r[col_ean_wz]).strip()
         m = re.search(r"(\d{13})", raw_ean)
         if not m:
             continue
         ean = m.group(1)
-        raw_qty = str(r[col_qty_wz])
+        raw_qty = str(r[col_qty_wz]).strip()
         clean = raw_qty.replace(" ", "").replace("\xa0", "").replace(",", ".")
         try:
             qty = float(clean)
@@ -143,7 +143,6 @@ df_cmp.sort_values(['Status','Symbol'], inplace=True)
 # ------------------------------
 # 5) Wyświetlenie i eksport
 # ------------------------------
-
 st.markdown("### 📊 Wyniki porównania")
 st.dataframe(
     df_cmp.style
@@ -151,7 +150,6 @@ st.dataframe(
         .apply(highlight_status, axis=1),
     use_container_width=True
 )
-
 
 def to_excel(df):
     buf = BytesIO()
