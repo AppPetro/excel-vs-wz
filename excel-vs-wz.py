@@ -36,16 +36,7 @@ def highlight_status_row(row):
 
 
 def normalize_col_name(name: str) -> str:
-    return name.lower().replace(" ", "").replace(" ", "").replace("_", ""), gdzie kolumna EAN może się nazywać:
-       - `Kod produktu`, `EAN`, `symbol`
-       - Ilość: `Ilość`, `Ilosc`, `Quantity`, `Qty`
-    3. Aplikacja:
-       - rozpozna synonimy kolumn,
-       - z PDF → przeprocesuje `extract_tables()`,
-       - zsumuje po EAN-ach i porówna z zamówieniem,
-       - wyświetli tabelę z kolorowaniem i pozwoli pobrać wynik.
-    """
-)
+    return name.lower().replace(" ", "").replace(" ", "").replace("_", "")
 
 # 1) Wgrywanie plików
 st.sidebar.header("Krok 1: Excel (zamówienie)")
