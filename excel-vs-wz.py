@@ -101,12 +101,12 @@ if ext == "pdf":
                             break
                     if qty_cell is None:
                         continue
-                    val = str(qty_cell).replace(" ","").replace("\xa0","").replace(",",")").replace(",",")").replace(",",")").replace(",",")").replace(",",")").replace(",",")").replace(",",")").replace(",",")").replace(",",")").replace(",",")")).replace(",",".")
+                    val = str(qty_cell).replace(" ", "").replace(" ", "").replace(",", ".")
                     try:
                         qty = float(val)
                     except:
                         qty = 0.0
-                    rows.append((ean_match, qty))
+                    rows.append((ean_match, qty))((ean_match, qty))
 else:
     df_wz_raw = pd.read_excel(file_wz, dtype=str)
     ean_col_wz = find_col(df_wz_raw, syn_ean_wz)
