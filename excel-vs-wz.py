@@ -21,22 +21,30 @@ st.markdown(
     """
 )
 
+
 def highlight_status_row(row):
     color = "#c6efce" if row["Status"] == "OK" else "#ffc7ce"
     return [f"background-color: {color}" for _ in row.index]
 
+
 def normalize_col_name(name: str) -> str:
     return name.lower().replace(" ", "").replace("\xa0", "").replace("_", "")
 
+
 # 1) Wgrywanie plików
 st.sidebar.header("Krok 1: Zlecenie/Zamówienie (PDF lub Excel)")
-uploaded_order = st.sidebar.file_uploader("Wybierz plik Zlecenia/Zamówienia", type=["xlsx", "pdf"])
+uploaded_order = st.sidebar.file_uploader(
+    "Wybierz plik Zlecenia/Zamówienia", type=["xlsx", "pdf"]
+)
 st.sidebar.header("Krok 2: WZ (PDF lub Excel)")
-uploaded_wz = st.sidebar.file_uploader("Wybierz plik WZ", type=["xlsx", "pdf"])
+uploaded_wz = st.sidebar.file_uploader(
+    "Wybierz plik WZ", type=["xlsx", "pdf"]
+)
 
 if not uploaded_order or not uploaded_wz:
     st.info("Proszę wgrać oba pliki: Zlecenie/Zamówienie oraz WZ.")
     st.stop()
+
 
 # 2) Parsowanie Zlecenia/Zamówienia
 ext_order = uploaded_order.name.lower().rsplit(".", 1)[-1]
@@ -77,15 +85,27 @@ else:
             if normalize_col_name(c) in syns:
                 return c
         return None
+
     col_ean_order = find_col(df_order_raw, syn_ean_ord)
     col_qty_order = find_col(df_order_raw, syn_qty_ord)
     if not col_ean_order or not col_qty_order:
-        st.error("Excel Zlecenia/Zamówienia musi mieć kolumny EAN i Ilość. Znalezione: {list(df_order_raw.columns)}")
+        st.error(f"Excel Zlecenia/Zamówienia musi mieć kolumny EAN i Ilość. Znalezione: {list(df_order_raw.columns)}")
         st.stop()
+
     df_order = pd.DataFrame({
-        "Symbol": df_order_raw[col_ean_order].astype(str).str.strip().str.replace(r"\.0+$", "", regex=True),
-        "Ilość": pd.to_numeric(df_order_raw[col_qty_order].astype(str).str.replace(r"\s+", "", regex=True).str.replace(",", "."), errors="coerce").fillna(0)
+        "Symbol": df_order_raw[col_ean_order]
+            .astype(str)
+            .str.strip()
+            .str.replace(r"\.0+$", "", regex=True),
+        "Ilość": pd.to_numeric(
+            df_order_raw[col_qty_order]
+                .astype(str)
+                .str.replace(r"\s+", "", regex=True)
+                .str.replace(",", "."),
+            errors="coerce"
+        ).fillna(0)
     })
+
 
 # 3) Parsowanie WZ
 ext_wz = uploaded_wz.name.lower().rsplit(".", 1)[-1]
@@ -121,43 +141,72 @@ else:
         st.stop()
     syn_ean_wz = {normalize_col_name(c): c for c in ["Kod produktu","EAN","symbol"]}
     syn_qty_wz = {normalize_col_name(c): c for c in ["Ilość","Ilosc","Quantity","Qty"]}
+    def find_col(df, syns):
+        for c in df.columns:
+            if normalize_col_name(c) in syns:
+                return c
+        return None
+
     col_ean_wz = find_col(df_wz_raw, syn_ean_wz)
     col_qty_wz = find_col(df_wz_raw, syn_qty_wz)
     if not col_ean_wz or not col_qty_wz:
         st.error(f"Excel WZ musi mieć kolumny EAN i Ilość. Znalezione: {list(df_wz_raw.columns)}")
         st.stop()
     df_wz = pd.DataFrame({
-        "Symbol": df_wz_raw[col_ean_wz].astype(str).str.strip().str.split().str[-1],
-        "Ilość_WZ": pd.to_numeric(df_wz_raw[col_qty_wz].astype(str).str.replace(r"\s+", "", regex=True).str.replace(",", "."), errors="coerce").fillna(0)
+        "Symbol": df_wz_raw[col_ean_wz]
+            .astype(str)
+            .str.strip()
+            .str.split()
+            .str[-1],
+        "Ilość_WZ": pd.to_numeric(
+            df_wz_raw[col_qty_wz]
+                .astype(str)
+                .str.replace(r"\s+", "", regex=True)
+                .str.replace(",", "."),
+            errors="coerce"
+        ).fillna(0)
     })
+
 
 # 4) Grupowanie, sumowanie, porównanie i wyświetlenie
 # Grupowanie
- df_ord_g = df_order.groupby("Symbol", as_index=False).agg({"Ilość": "sum"}).rename(columns={"Ilość": "Zamówiona_ilość"})
- df_wz_g  = df_wz.groupby("Symbol",    as_index=False).agg({"Ilość_WZ": "sum"}).rename(columns={"Ilość_WZ": "Wydana_ilość"})
+df_ord_g = df_order.groupby("Symbol", as_index=False).agg({"Ilość": "sum"}).rename(columns={"Ilość": "Zamówiona_ilość"})
+df_wz_g  = df_wz.groupby("Symbol",    as_index=False).agg({"Ilość_WZ": "sum"}).rename(columns={"Ilość_WZ": "Wydana_ilość"})
 
 # Porównanie
- df_cmp = pd.merge(df_ord_g, df_wz_g, on="Symbol", how="outer", indicator=True)
- df_cmp["Zamówiona_ilość"] = df_cmp["Zamówiona_ilość"].fillna(0)
- df_cmp["Wydana_ilość"]    = df_cmp["Wydana_ilość"].fillna(0)
- df_cmp["Różnica"]         = df_cmp["Zamówiona_ilość"] - df_cmp["Wydana_ilość"]
+df_cmp = pd.merge(df_ord_g, df_wz_g, on="Symbol", how="outer", indicator=True)
+df_cmp["Zamówiona_ilość"] = df_cmp["Zamówiona_ilość"].fillna(0)
+df_cmp["Wydana_ilość"]    = df_cmp["Wydana_ilość"].fillna(0)
+df_cmp["Różnica"]         = df_cmp["Zamówiona_ilość"] - df_cmp["Wydana_ilość"]
 
- def status(r):
-     if r["_merge"] == "left_only":  return "Brak we WZ"
-     if r["_merge"] == "right_only": return "Brak w zamówieniu"
-     return "OK" if r["Różnica"] == 0 else "Różni się"
+def status(r):
+    if r["_merge"] == "left_only":
+        return "Brak we WZ"
+    if r["_merge"] == "right_only":
+        return "Brak w zamówieniu"
+    return "OK" if r["Różnica"] == 0 else "Różni się"
 
- df_cmp["Status"] = df_cmp.apply(status, axis=1)
- order_stats = ["Różni się", "Brak we WZ", "Brak w zamówieniu", "OK"]
- df_cmp["Status"] = pd.Categorical(df_cmp["Status"], categories=order_stats, ordered=True)
- df_cmp = df_cmp.sort_values(["Status", "Symbol"])
+order_stats = ["Różni się", "Brak we WZ", "Brak w zamówieniu", "OK"]
+df_cmp["Status"] = df_cmp.apply(status, axis=1)
+df_cmp["Status"] = pd.Categorical(df_cmp["Status"], categories=order_stats, ordered=True)
+df_cmp = df_cmp.sort_values(["Status", "Symbol"])
 
-# Wyświetlenie i eksport\ n
- st.markdown("### 📊 Wynik porównania")
- st.dataframe(df_cmp.style.format({"Zamówiona_ilość": "{:.0f}", "Wydana_ilość": "{:.0f}", "Różnica": "{:.0f}"}).apply(highlight_status_row, axis=1), use_container_width=True)
- 
- out = BytesIO()
- writer = pd.ExcelWriter(out, engine="openpyxl")
- df_cmp.to_excel(writer, index=False, sheet_name="Porównanie")
- writer.close()
- st.download_button("⬇️ Pobierz raport Excel", data=out.getvalue(), file_name="porownanie.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+# Wyświetlenie i eksport
+st.markdown("### 📊 Wynik porównania")
+st.dataframe(
+    df_cmp.style
+        .format({"Zamówiona_ilość": "{:.0f}", "Wydana_ilość": "{:.0f}", "Różnica": "{:.0f}"})
+        .apply(highlight_status_row, axis=1),
+    use_container_width=True
+)
+
+out = BytesIO()
+writer = pd.ExcelWriter(out, engine="openpyxl")
+df_cmp.to_excel(writer, index=False, sheet_name="Porównanie")
+writer.close()
+st.download_button(
+    "⬇️ Pobierz raport Excel",
+    data=out.getvalue(),
+    file_name="porownanie.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+)
