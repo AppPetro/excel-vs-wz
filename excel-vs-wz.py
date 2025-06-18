@@ -21,7 +21,7 @@ st.markdown(
        - Ilość: `Ilość`, `Ilosc`, `Quantity`, `Qty`
     3. Aplikacja:
        - rozpozna synonimy kolumn,
-       - z PDF → przeprocesuje `extract_tables()`,
+       - z PDF → przeprocesuje `extract_text()` z regex,
        - zsumuje po EAN-ach i porówna z zamówieniem,
        - wyświetli tabelę z kolorowaniem i pozwoli pobrać wynik.
     """
@@ -88,99 +88,24 @@ if extension == "pdf":
         with pdfplumber.open(uploaded_wz) as pdf:
             wz_rows = []
 
-            syn_ean_wz = { normalize_col_name(c): c for c in ["Kod produktu","EAN","symbol"] }
-            syn_qty_wz = { normalize_col_name(c): c for c in ["Ilość","Ilosc","Quantity","Qty"] }
-
-            def parse_wz_table(df_table: pd.DataFrame):
-                cols = list(df_table.columns)
-
-                # 1) EAN
-                col_ean = next((c for c in cols if normalize_col_name(c) in syn_ean_wz), None)
-                if not col_ean:
-                    return
-
-                # 2) Ilość – prosta kolumna
-                col_qty = next((c for c in cols if normalize_col_name(c) in syn_qty_wz), None)
-                if col_qty:
-                    for _, row in df_table.iterrows():
-                        raw_ean = str(row[col_ean]).strip().split()[-1]
-                        if not re.fullmatch(r"\d{13}", raw_ean):
-                            continue
-
-                        # — poprawione czyszczenie ilości: usuwa WSZYSTKIE białe znaki —
-                        raw_qty_str = str(row[col_qty]).strip()
-                        raw_qty_str = re.sub(r"\s+", "", raw_qty_str)    # usuwa spacje, NBSP itd.
-                        raw_qty_str = raw_qty_str.replace(",", ".")      # zamiana przecinka na kropkę
-                        try:
-                            qty = float(raw_qty_str)
-                        except:
-                            qty = 0.0
-
-                        wz_rows.append([raw_ean, qty])
-                    return
-
-                # 3) Broken header: "Termin ważności Ilość" + "Waga brutto"
-                col_part_int = None
-                col_part_dec = None
-                for rc in cols:
-                    low = normalize_col_name(rc)
-                    if "termin" in low and "ilo" in low:
-                        col_part_int = rc
-                    if "waga" in low:
-                        col_part_dec = rc
-                if not col_part_int or not col_part_dec:
-                    return
-
-                for _, row in df_table.iterrows():
-                    raw_ean = str(row[col_ean]).strip().split()[-1]
-                    if not re.fullmatch(r"\d{13}", raw_ean):
-                        continue
-
-                    # — wyciągamy ilość (z separatorem tysięcy i przecinkiem dziesiętnym) na końcu komórki —
-                    part_cell = str(row[col_part_int]).strip()
-                    m = re.search(r"([\d\s]+,\d{2})$", part_cell)
-                    if m:
-                        num = m.group(1).replace(" ", "").replace(",", ".")
-                        try:
-                            qty = float(num)
-                        except:
-                            qty = 0.0
-                    else:
-                        qty = 0.0
-
-                    wz_rows.append([raw_ean, qty])
-
-            # — wybór właściwego wiersza nagłówka —
+            # Regexowy skaner linii zamiast extract_tables()
             for page in pdf.pages:
-                tables = page.extract_tables()
-                for table in tables:
-                    if not table or len(table) < 2:
+                text = page.extract_text() or ""
+                for line in text.split("\n"):
+                    # dopasuj: numer, spacja, EAN(13), tekst, ilość, waga
+                    m = re.match(
+                        r"\s*\d+\s+(\d{13})\s+.+?\s+([\d\s]+,\d{2})\s+[\d\s]+,\d{2}$",
+                        line
+                    )
+                    if not m:
                         continue
-                    hdr0 = table[0]
-                    hdr1 = table[1]
-                    norm0 = [normalize_col_name(str(x)) for x in hdr0]
-                    norm1 = [normalize_col_name(str(x)) for x in hdr1]
-
-                    has_ean0 = any(k in syn_ean_wz for k in norm0)
-                    has_qty0 = any(k in syn_qty_wz for k in norm0)
-                    has_ean1 = any(k in syn_ean_wz for k in norm1)
-                    has_qty1 = any(k in syn_qty_wz for k in norm1)
-
-                    if has_ean0 and has_qty0:
-                        header, data = hdr0, table[1:]
-                    elif has_ean1 and has_qty1:
-                        header, data = hdr1, table[2:]
-                    elif has_ean0:
-                        header, data = hdr0, table[1:]
-                    elif has_ean1:
-                        header, data = hdr1, table[2:]
-                    else:
-                        continue
-
-                    if not data:
-                        continue
-                    df_page = pd.DataFrame(data, columns=header)
-                    parse_wz_table(df_page)
+                    raw_ean = m.group(1)
+                    raw_qty = m.group(2).replace(" ", "").replace(",", ".")
+                    try:
+                        qty = float(raw_qty)
+                    except:
+                        qty = 0.0
+                    wz_rows.append([raw_ean, qty])
 
     except Exception as e:
         st.error(f"Nie udało się przetworzyć PDF:\n```{e}```")
