@@ -101,7 +101,7 @@ if extension == "pdf":
                         raw_ean = str(row[col_ean]).strip().split()[-1]
                         if not re.fullmatch(r"\d{13}", raw_ean):
                             continue
-                        raw_qty = str(row[col_qty]).strip().replace(" ", "").replace(",", ".")
+                        raw_qty = str(row[col_qty]).strip().replace(" ", "").replace(" ", "").replace(",", ".")
                         try:
                             qty = float(raw_qty)
                         except:
