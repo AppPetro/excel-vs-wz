@@ -22,15 +22,17 @@ st.markdown(
        - Ilość: `Ilość`, `Ilosc`, `Quantity`, `Qty`
     3. Aplikacja:
        - rozpozna synonimy kolumn,
-       - z PDF → przeprocesuje `extract_tables()`,
+       - z PDF → przeprocesuje `extract_tables()` / z Excela bezpośrednio,
        - zsumuje po EAN-ach i porówna z zamówieniem,
        - wyświetli tabelę z kolorowaniem i pozwoli pobrać wynik.
     """
 )
 
+
 def highlight_status_row(row):
     color = "#c6efce" if row["Status"] == "OK" else "#ffc7ce"
     return [f"background-color: {color}" for _ in row.index]
+
 
 def normalize_col_name(name: str) -> str:
     return name.lower().replace(" ", "").replace("\xa0", "").replace("_", "")
@@ -101,7 +103,7 @@ if extension == "pdf":
                         raw_ean = str(row[col_ean]).strip().split()[-1]
                         if not re.fullmatch(r"\d{13}", raw_ean):
                             continue
-                        raw_qty = str(row[col_qty]).strip().replace(" ", "").replace(" ", "").replace(",", ".")
+                        raw_qty = str(row[col_qty]).strip().replace(" ", "").replace("\xa0", "").replace(",", ".")
                         try:
                             qty = float(raw_qty)
                         except:
@@ -118,7 +120,6 @@ if extension == "pdf":
                     raw_ean = str(row[col_ean]).strip().split()[-1]
                     if not re.fullmatch(r"\d{13}", raw_ean):
                         continue
-                    # Usuwamy separatory tysięcy i zamieniamy przecinek
                     part_cell = str(row[col_part]).strip()
                     part_clean = part_cell.replace(" ", "").replace(",", ".")
                     try:
@@ -127,18 +128,15 @@ if extension == "pdf":
                         qty = 0.0
                     wz_rows.append([raw_ean, qty])
 
-                        for page_idx, page in enumerate(pdf.pages):
+            # Procesowanie wszystkich tabel z każdej strony
+            for page in pdf.pages:
                 tables = page.extract_tables()
-                for table_idx, table in enumerate(tables):
+                for table in tables:
                     if not table or len(table) < 2:
                         continue
-                    hdr = table[0]
+                    header = table[0]
                     data = table[1:]
-                    df_page = pd.DataFrame(data, columns=hdr)
-                    # DEBUG: Wyświetl tabelę przed parsowaniem
-                    st.write(f"DEBUG: Page {page_idx+1}, Table {table_idx+1}")
-                    st.write(df_page.head())
-                    parse_wz_table(df_page)
+                    df_page = pd.DataFrame(data, columns=header)
                     parse_wz_table(df_page)
 
     except Exception as e:
