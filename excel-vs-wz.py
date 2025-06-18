@@ -10,7 +10,6 @@ st.set_page_config(
 )
 
 st.title("📋 Porównywarka Zamówienie (Excel) vs. WZ (PDF lub Excel)")
-
 st.markdown(
     """
     **Instrukcja:**
@@ -131,17 +130,18 @@ if extension == "pdf":
                     raw_ean = str(row[col_ean]).strip().split()[-1]
                     if not re.fullmatch(r"\d{13}", raw_ean):
                         continue
-# — wyciągamy ilość (z separatorem tysięcy i przecinkiem dziesiętnym) na końcu komórki —
-part_cell = str(row[col_part_int]).strip()
-m = re.search(r"([\d\s]+,\d{2})$", part_cell)
-if m:
-    num = m.group(1).replace(" ", "").replace(",", ".")
-    try:
-        qty = float(num)
-    except:
-        qty = 0.0
-else:
-    qty = 0.0
+
+                    # — wyciągamy ilość (z separatorem tysięcy i przecinkiem dziesiętnym) na końcu komórki —
+                    part_cell = str(row[col_part_int]).strip()
+                    m = re.search(r"([\d\s]+,\d{2})$", part_cell)
+                    if m:
+                        num = m.group(1).replace(" ", "").replace(",", ".")
+                        try:
+                            qty = float(num)
+                        except:
+                            qty = 0.0
+                    else:
+                        qty = 0.0
 
                     wz_rows.append([raw_ean, qty])
 
@@ -165,9 +165,9 @@ else:
                         header, data = hdr0, table[1:]
                     elif has_ean1 and has_qty1:
                         header, data = hdr1, table[2:]
-                    elif has_ean0:      # broken header in first row
+                    elif has_ean0:
                         header, data = hdr0, table[1:]
-                    elif has_ean1:      # broken header in second row
+                    elif has_ean1:
                         header, data = hdr1, table[2:]
                     else:
                         continue
