@@ -106,11 +106,16 @@ if extension == "pdf":
                         raw_ean = str(row[col_ean]).strip().split()[-1]
                         if not re.fullmatch(r"\d{13}", raw_ean):
                             continue
-                        raw_qty = str(row[col_qty]).strip().replace(",",".").replace(" ","")
+
+                        # — poprawione czyszczenie ilości: usuwa WSZYSTKIE białe znaki —
+                        raw_qty_str = str(row[col_qty]).strip()
+                        raw_qty_str = re.sub(r"\s+", "", raw_qty_str)    # usuwa spacje, NBSP itd.
+                        raw_qty_str = raw_qty_str.replace(",", ".")      # zamiana przecinka na kropkę
                         try:
-                            qty = float(raw_qty)
+                            qty = float(raw_qty_str)
                         except:
                             qty = 0.0
+
                         wz_rows.append([raw_ean, qty])
                     return
 
