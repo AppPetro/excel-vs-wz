@@ -151,7 +151,7 @@ def to_excel(dataframe):
     buf = BytesIO()
     writer = pd.ExcelWriter(buf, engine='openpyxl')
     dataframe.to_excel(writer, index=False, sheet_name='Porównanie')
-    writer.save()
+    writer.close()
     return buf.getvalue()
 
 st.download_button(
