@@ -19,8 +19,7 @@ def normalize_col(name: str) -> str:
     return re.sub(r"[\s\xa0_\.]+", "", str(name)).lower()
 
 def highlight_status(row):
-    color = "#c6efce" if row.Status == "OK" else "#ffc7ce"
-    return [f"background-color: {color}"] * len(row)
+    return ["background-color: #c6efce" if row.Status == "OK" else "background-color: #ffc7ce" for _ in row]
 
 def find_col(df: pd.DataFrame, synonyms: set) -> str:
     for col in df.columns:
@@ -89,11 +88,9 @@ if ext == "pdf":
                     header, data = hdr0, table[1:]
                 df_table = pd.DataFrame(data, columns=header)
                 for _, r in df_table.iterrows():
-                    # EAN
                     ean_match = next((m.group(1) for cell in r.astype(str) if (m := re.search(r"(\d{13})", cell))), None)
                     if not ean_match:
                         continue
-                    # Ilość
                     qty_cell = None
                     for col in header:
                         if normalize_col(col) in syn_qty_wz:
@@ -101,12 +98,12 @@ if ext == "pdf":
                             break
                     if qty_cell is None:
                         continue
-                    val = str(qty_cell).replace(" ", "").replace(" ", "").replace(",", ".")
+                    val = str(qty_cell).replace(" ", "").replace("\xa0", "").replace(",", ".")
                     try:
                         qty = float(val)
                     except:
                         qty = 0.0
-                    rows.append((ean_match, qty))((ean_match, qty))
+                    rows.append((ean_match, qty))
 else:
     df_wz_raw = pd.read_excel(file_wz, dtype=str)
     ean_col_wz = find_col(df_wz_raw, syn_ean_wz)
@@ -115,14 +112,15 @@ else:
         st.error(f"Brak kolumn EAN/Ilość w WZ: {list(df_wz_raw.columns)}")
         st.stop()
     for _, r in df_wz_raw.iterrows():
-        if (m := re.search(r"(\d{13})", str(r[ean_col_wz]))):
-            raw = str(r[qty_col_wz])
-            val = raw.replace(" ","").replace("\xa0","").replace(",",".")
-            try:
-                qty = float(val)
-            except:
-                qty = 0.0
-            rows.append((m.group(1), qty))
+        m = re.search(r"(\d{13})", str(r[ean_col_wz]))
+        if not m:
+            continue
+        val = str(r[qty_col_wz]).replace(" ", "").replace("\xa0", "").replace(",", ".")
+        try:
+            qty = float(val)
+        except:
+            qty = 0.0
+        rows.append((m.group(1), qty))
 
 if not rows:
     st.error("Nie znaleziono danych w WZ.")
@@ -134,14 +132,13 @@ df_wz = pd.DataFrame(rows, columns=["Symbol","Wydana"]).groupby("Symbol", as_ind
 # ------------------------------
 # 4) Porównanie
 # ------------------------------
-
 df_cmp = pd.merge(df_order, df_wz, on="Symbol", how="outer", indicator=True)
-=df_cmp[["Zamówiona","Wydana"]].fillna(0)
+df_cmp[["Zamówiona","Wydana"]] = df_cmp[["Zamówiona","Wydana"]].fillna(0)
 df_cmp["Różnica"] = df_cmp["Zamówiona"] - df_cmp["Wydana"]
 status_map = {'left_only':'Brak we WZ','right_only':'Brak w zamówieniu'}
 
 def get_status(row):
-    return status_map.get(row._merge, 'OK' if row.Różnica==0 else 'Różni się')
+    return status_map.get(row._merge, 'OK' if row.Różnica == 0 else 'Różni się')
 
 df_cmp['Status'] = df_cmp.apply(get_status, axis=1)
 df_cmp['Status'] = pd.Categorical(df_cmp['Status'], categories=['Różni się','Brak we WZ','Brak w zamówieniu','OK'], ordered=True)
@@ -150,16 +147,13 @@ df_cmp.sort_values(['Status','Symbol'], inplace=True)
 # ------------------------------
 # 5) Wyświetlenie i eksport
 # ------------------------------
-
 st.markdown("### 📊 Wyniki porównania")
 st.dataframe(
-    df_cmp.style
-        .format({'Zamówiona':'{:.0f}','Wydana':'{:.0f}','Różnica':'{:.0f}'})
-        .apply(highlight_status, axis=1),
+    df_cmp.style.format({'Zamówiona':'{:.0f}','Wydana':'{:.0f}','Różnica':'{:.0f}'}).apply(highlight_status, axis=1),
     use_container_width=True
 )
 
-
+# Eksport
 def to_excel(df):
     buf = BytesIO()
     writer = pd.ExcelWriter(buf, engine='openpyxl')
@@ -168,7 +162,7 @@ def to_excel(df):
     return buf.getvalue()
 
 st.download_button(
-    "⬇️ Pobierz raport",
+    label='⬇️ Pobierz raport',
     data=to_excel(df_cmp),
     file_name='porownanie_order_vs_wz.xlsx',
     mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
@@ -178,4 +172,4 @@ st.download_button(
 if (df_cmp['Status'] == 'OK').all():
     st.success("✅ Wszystkie pozycje się zgadzają")
 else:
-    st.error("❌ Wykryto rozbieżności w pozycjach")
+    st.error("❌ Wykryto rozbieżności")
