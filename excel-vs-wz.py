@@ -109,64 +109,32 @@ if extension == "pdf":
                         wz_rows.append([raw_ean, qty])
                     return
 
-                # 3) Broken header: "Termin ważności Ilość" + "Waga brutto"
-                col_part_int = None
-                col_part_dec = None
-                for rc in cols:
-                    low = normalize_col_name(rc)
-                    if "termin" in low and "ilo" in low:
-                        col_part_int = rc
-                    if "waga" in low:
-                        col_part_dec = rc
-                if not col_part_int or not col_part_dec:
+                # 3) Broken header: 'Termin ważności Ilość'
+                col_part = next((c for c in cols if "termin" in normalize_col_name(c) and "ilo" in normalize_col_name(c)), None)
+                if not col_part:
                     return
 
-                # Oryginalna logika parsowania ilości z kolumny po dacie
                 for _, row in df_table.iterrows():
                     raw_ean = str(row[col_ean]).strip().split()[-1]
                     if not re.fullmatch(r"\d{13}", raw_ean):
                         continue
-                    part_cell = str(row[col_part_int]).strip()
-                    tokens = part_cell.split()
-                    token = tokens[-1] if tokens else ""
-                    raw_int = token.split(",")[0] if token else "0"
-                    raw_dec = "00"
+                    # Usuwamy separatory tysięcy i zamieniamy przecinek
+                    part_cell = str(row[col_part]).strip()
+                    part_clean = part_cell.replace(" ", "").replace(",", ".")
                     try:
-                        qty = float(f"{raw_int}.{raw_dec}")
+                        qty = float(part_clean)
                     except:
                         qty = 0.0
                     wz_rows.append([raw_ean, qty])
 
-            # Przetwarzanie tabel
             for page in pdf.pages:
                 tables = page.extract_tables()
                 for table in tables:
                     if not table or len(table) < 2:
                         continue
-                    hdr0 = table[0]
-                    hdr1 = table[1]
-                    norm0 = [normalize_col_name(str(x)) for x in hdr0]
-                    norm1 = [normalize_col_name(str(x)) for x in hdr1]
-
-                    has_ean0 = any(k in syn_ean_wz for k in norm0)
-                    has_qty0 = any(k in syn_qty_wz for k in norm0)
-                    has_ean1 = any(k in syn_ean_wz for k in norm1)
-                    has_qty1 = any(k in syn_qty_wz for k in norm1)
-
-                    if has_ean0 and has_qty0:
-                        header, data = hdr0, table[1:]
-                    elif has_ean1 and has_qty1:
-                        header, data = hdr1, table[2:]
-                    elif has_ean0:
-                        header, data = hdr0, table[1:]
-                    elif has_ean1:
-                        header, data = hdr1, table[2:]
-                    else:
-                        continue
-
-                    if not data:
-                        continue
-                    df_page = pd.DataFrame(data, columns=header)
+                    hdr = table[0]
+                    data = table[1:]
+                    df_page = pd.DataFrame(data, columns=hdr)
                     parse_wz_table(df_page)
 
     except Exception as e:
@@ -209,11 +177,9 @@ else:
             df_wz_raw.loc[mask, col_qty_wz]
                 .astype(str)
                 .str.replace(",",".")
-                .str.replace(r"\s+", "", regex=True),
+                .str.replace(r"\s+","", regex=True),
             errors="coerce"
         ).fillna(0)
     })
 
-# 4) Grupowanie i sumowanie
-df_ord_g = df_order.groupby("Symbol", as_index=False).agg({"Ilość":"sum"}).rename(columns={"Ilość":"Zamówiona_ilość"})
-df_wz_g  = df_wz.groupby("Symbol",   as_index=False).agg({"Ilość_WZ":"sum"}).rename(columns
+# 4) Grupowanie, porównanie i wyświetlenie
