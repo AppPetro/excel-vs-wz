@@ -28,30 +28,17 @@ st.markdown(
     """
 )
 
-def highlight_status_row(row):
-    color = "#c6efce" if row["Status"] == "OK" else "#ffc7ce"
-    return [f"background-color: {color}" for _ in row.index]
-
-def normalize_col_name(name: str) -> str:
-    return name.lower().replace(" ", "").replace("\xa0", "").replace("_", "")
-
 # 1) Wgrywanie plików
 st.sidebar.header("Krok 1: Excel (zamówienie)")
 uploaded_order = st.sidebar.file_uploader("Wybierz plik zamówienia", type=["xlsx"])
 st.sidebar.header("Krok 2: WZ (PDF lub Excel)")
 uploaded_wz = st.sidebar.file_uploader("Wybierz plik WZ", type=["pdf", "xlsx"])
-
 if not uploaded_order or not uploaded_wz:
     st.info("Proszę wgrać oba pliki: Excel (zamówienie) oraz PDF/Excel (WZ).")
     st.stop()
 
 # 2) Parsowanie zamówienia
-try:
-    df_order_raw = pd.read_excel(uploaded_order, dtype=str)
-except Exception as e:
-    st.error(f"Nie udało się wczytać pliku zamówienia:\n```{e}```")
-    st.stop()
-
+df_order_raw = pd.read_excel(uploaded_order, dtype=str)
 syn_ean_ord = { normalize_col_name(c): c for c in ["Symbol","symbol","kod ean","ean","kod produktu"] }
 syn_qty_ord = { normalize_col_name(c): c for c in ["Ilość","Ilosc","Quantity","Qty","sztuki"] }
 
@@ -64,30 +51,34 @@ def find_col(df, syns):
 col_ean_order = find_col(df_order_raw, syn_ean_ord)
 col_qty_order = find_col(df_order_raw, syn_qty_ord)
 if not col_ean_order or not col_qty_order:
-    st.error(
-        "Excel zamówienia musi mieć kolumny EAN i Ilość.\n"
-        f"Znalezione: {list(df_order_raw.columns)}"
-    )
+    st.error(f"Brak kolumn EAN lub Ilość w zamówieniu: {list(df_order_raw.columns)}")
     st.stop()
 
-# przygotowanie DataFrame zamówienia
 df_order = pd.DataFrame({
     "Symbol": df_order_raw[col_ean_order].astype(str).str.strip().str.replace(r"\.0+$","",regex=True),
     "Ilość": pd.to_numeric(df_order_raw[col_qty_order], errors="coerce").fillna(0)
 })
 
 # 3) Parsowanie WZ
-ext = uploaded_wz.name.lower().split('.')[-1]
+ext = uploaded_wz.name.lower().rsplit('.',1)[-1]
+wz_rows = []
+
+syn_ean_wz = { normalize_col_name(c): c for c in ["Kod produktu","EAN","symbol"] }
+syn_qty_wz = { normalize_col_name(c): c for c in ["Ilość","Ilosc","Quantity","Qty"] }
+
 if ext == 'pdf':
     with pdfplumber.open(uploaded_wz) as pdf:
-        wz_rows = []
-        syn_ean_wz = { normalize_col_name(c): c for c in ["Kod produktu","EAN","symbol"] }
-        syn_qty_wz = { normalize_col_name(c): c for c in ["Ilość","Ilosc","Quantity","Qty"] }
-        
         def parse_wz_table(df_table: pd.DataFrame):
             cols = list(df_table.columns)
             col_ean = next((c for c in cols if normalize_col_name(c) in syn_ean_wz), None)
             col_qty = next((c for c in cols if normalize_col_name(c) in syn_qty_wz), None)
+            # fallback: broken header e.g. 'Termin ważności Ilość'
+            if not col_qty:
+                for c in cols:
+                    low = normalize_col_name(c)
+                    if "termin" in low and "ilo" in low:
+                        col_qty = c
+                        break
             if not col_ean or not col_qty:
                 return
             for _, row in df_table.iterrows():
@@ -101,46 +92,33 @@ if ext == 'pdf':
                     qty = 0.0
                 wz_rows.append([raw_ean, qty])
 
-                for page in pdf.pages:
-            tables = page.extract_tables()
+        for page in pdf.pages:
+            tables = page.extract_tables() or []
             for table in tables:
                 if not table or len(table) < 2:
                     continue
-                hdr0 = table[0]
-                hdr1 = table[1]
-                norm0 = [normalize_col_name(str(x)) for x in hdr0]
-                norm1 = [normalize_col_name(str(x)) for x in hdr1]
-                has_ean0 = any(k in syn_ean_wz for k in norm0)
-                has_qty0 = any(k in syn_qty_wz for k in norm0)
-                has_ean1 = any(k in syn_ean_wz for k in norm1)
-                has_qty1 = any(k in syn_qty_wz for k in norm1)
-                if has_ean0 and has_qty0:
-                    header, data = hdr0, table[1:]
-                elif has_ean1 and has_qty1:
-                    header, data = hdr1, table[2:]
-                elif has_ean0:
-                    header, data = hdr0, table[1:]
-                elif has_ean1:
-                    header, data = hdr1, table[2:]
-                else:
-                    continue
-                df_page = pd.DataFrame(data, columns=header)
+                df_page = pd.DataFrame(table[1:], columns=table[0])
                 parse_wz_table(df_page)
 
-    df_wz = pd.DataFrame(wz_rows, columns=["Symbol","Ilość_WZ"]).groupby("Symbol", as_index=False).sum()(wz_rows, columns=["Symbol","Ilość_WZ"]).groupby("Symbol", as_index=False).sum()
 else:
     df_wz_raw = pd.read_excel(uploaded_wz, dtype=str)
-    syn_ean_wz = { normalize_col_name(c): c for c in ["Kod produktu","EAN","symbol"] }
-    syn_qty_wz = { normalize_col_name(c): c for c in ["Ilość","Ilosc","Quantity","Qty"] }
     col_ean_wz = find_col(df_wz_raw, syn_ean_wz)
     col_qty_wz = find_col(df_wz_raw, syn_qty_wz)
-    df_wz = pd.DataFrame({
-        "Symbol": df_wz_raw[col_ean_wz].astype(str).str.strip().str.split().str[-1],
-        "Ilość_WZ": pd.to_numeric(
-            df_wz_raw[col_qty_wz].astype(str).str.replace(",",".").str.replace(r"\s+","",regex=True),
-            errors="coerce"
-        ).fillna(0)
-    }).groupby("Symbol", as_index=False).sum()
+    if not col_ean_wz or not col_qty_wz:
+        st.error(f"Brak kolumn EAN lub Ilość w pliku WZ: {list(df_wz_raw.columns)}")
+        st.stop()
+    for _, r in df_wz_raw.iterrows():
+        raw_ean = str(r[col_ean_wz]).strip().split()[-1]
+        if not re.fullmatch(r"\d{13}", raw_ean):
+            continue
+        raw_qty = str(r[col_qty_wz]).replace(" ","").replace(",",".")
+        try:
+            qty = float(raw_qty)
+        except:
+            qty = 0.0
+        wz_rows.append([raw_ean, qty])
+
+df_wz = pd.DataFrame(wz_rows, columns=["Symbol","Ilość_WZ"]).groupby("Symbol", as_index=False).sum()
 
 # 4) Porównanie
 df_cmp = pd.merge(
@@ -149,11 +127,12 @@ df_cmp = pd.merge(
     on="Symbol", how="outer", indicator=True
 )
 df_cmp["Zamówiona"] = df_cmp["Zamówiona"].fillna(0)
-df_cmp["Wydana"] = df_cmp["Wydana"].fillna(0)
-df_cmp["Różnica"] = df_cmp["Zamówiona"] - df_cmp["Wydana"]
+df_cmp["Wydana"]    = df_cmp["Wydana"].fillna(0)
+df_cmp["Różnica"]  = df_cmp["Zamówiona"] - df_cmp["Wydana"]
+
 def stat(r):
-    if r["_merge"]=="left_only": return "Brak we WZ"
-    if r["_merge"]=="right_only": return "Brak w zamówieniu"
+    if r["_merge"]=="left_only":   return "Brak we WZ"
+    if r["_merge"]=="right_only":  return "Brak w zamówieniu"
     return "OK" if r["Różnica"]==0 else "Różni się"
 df_cmp["Status"] = df_cmp.apply(stat, axis=1)
 order_stats = ["Różni się","Brak we WZ","Brak w zamówieniu","OK"]
@@ -182,7 +161,8 @@ st.download_button(
 )
 
 # Podsumowanie
-if (df_cmp["Status"]=="OK").all():
+all_ok = (df_cmp["Status"]=="OK").all()
+if all_ok:
     st.markdown("<h4 style='color:green;'>✅ Pozycje się zgadzają</h4>", unsafe_allow_html=True)
 else:
     st.markdown("<h4 style='color:red;'>❌ Pozycje się nie zgadzają</h4>", unsafe_allow_html=True)
