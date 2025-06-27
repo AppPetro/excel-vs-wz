@@ -146,11 +146,18 @@ with st.expander("🛈 Instrukcja obsługi", expanded=False):
 
 **Dla Excela (.xlsx):**  
 1. Aplikacja sama wyszukuje wiersz nagłówka (może być w dowolnej linii).  
-2. Rozpoznaje kolumnę z kodami **EAN** i kolumnę z **ilościami** wg poniższych synonimów:
+2. Rozpoznaje kolumnę z kodami **EAN** i kolumnę z **ilościami** wg poniższych synonimów:  
    - **EAN**: Symbol, symbol, Kod EAN, kod ean, Kod produktu, GTIN  
    - **Ilość**: Ilość, Ilosc, Quantity, Qty, sztuki, ilość sztuk zamówiona, zamówiona ilość  
 3. Usuwa z EAN ewentualny sufiks `.0` (np. `4250231542008.0` → `4250231542008`).  
 4. Ilości w formacie `1 638,00` lub `1638,00` poprawnie konwertuje (usuwa spacje, zamienia przecinek na kropkę).
 
 **Dla PDF:**  
-- Aplikacja skanuje każdą linijkę i wyciąga EAN oraz ilość z wzorca:
+- Aplikacja skanuje każdą linijkę tekstu i wyciąga EAN oraz ilość z wzorca:  
+  [nr]  [EAN]  …  [ilość z separatorem tysięcy i przecinkiem]  [waga]
+
+**Wynik:**  
+- Tabela: **Symbol**, **Zamówiona_ilość**, **Wydana_ilość**, **Różnica**, **Status**.  
+- Zielone wiersze = OK; czerwone = rozbieżności/braki.  
+- Kliknij „Pobierz raport”, by pobrać gotowy plik Excel.
+    """)
