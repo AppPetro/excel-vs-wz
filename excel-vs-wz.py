@@ -4,205 +4,116 @@ import pdfplumber
 import re
 from io import BytesIO
 
-# ----------------------------------------------------------------
-# funkcje pomocnicze
-# ----------------------------------------------------------------
+# ── Funkcje pomocnicze ──────────────────────────────────────────
 def normalize_col_name(name: str) -> str:
     return name.lower().replace(" ", "").replace("\xa0", "").replace("_", "")
 
 def clean_ean(raw: str) -> str:
     s = str(raw).strip()
-    if s.endswith(".0"):
-        return s[:-2]
-    return s
+    return s[:-2] if s.endswith(".0") else s
 
 def clean_qty(raw: str) -> float:
-    s = str(raw).strip()
-    s = re.sub(r"\s+", "", s).replace(",", ".")
-    try:
-        return float(s)
-    except:
-        return 0.0
+    s = re.sub(r"\s+", "", str(raw)).replace(",", ".")
+    try: return float(s)
+    except: return 0.0
 
-def find_header_and_idxs(df_raw: pd.DataFrame, syn_ean: dict, syn_qty: dict):
-    """Zwraca (header_row_index, ean_col_idx, qty_col_idx) lub (None, None, None)."""
-    for idx, row in df_raw.iterrows():
+def find_header_and_idxs(df: pd.DataFrame, syn_ean: dict, syn_qty: dict):
+    for i, row in df.iterrows():
         norm = [normalize_col_name(v) for v in row.values.astype(str)]
-        if any(h in syn_ean for h in norm) and any(h in syn_qty for h in norm):
-            ean_idx = next(i for i, v in enumerate(norm) if v in syn_ean)
-            qty_idx = next(i for i, v in enumerate(norm) if v in syn_qty)
-            return idx, ean_idx, qty_idx
+        if any(k in syn_ean for k in norm) and any(k in syn_qty for k in norm):
+            e_i = next(idx for idx,val in enumerate(norm) if val in syn_ean)
+            q_i = next(idx for idx,val in enumerate(norm) if val in syn_qty)
+            return i, e_i, q_i
     return None, None, None
 
-# ----------------------------------------------------------------
-# parsowanie Excela (wspólne dla obu uploaderów)
-# ----------------------------------------------------------------
-def parse_excel_generic(f, syn_ean_list, syn_qty_list, col_name_qty, col_name_ean="Symbol"):
-    df_raw = pd.read_excel(f, dtype=str, header=None)
-    syn_ean = {normalize_col_name(c): c for c in syn_ean_list}
-    syn_qty = {normalize_col_name(c): c for c in syn_qty_list}
+# ── Parsowanie Excela ───────────────────────────────────────────
+def parse_excel(f, syn_ean_list, syn_qty_list, col_qty_name):
+    df = pd.read_excel(f, dtype=str, header=None)
+    syn_ean = {normalize_col_name(x):x for x in syn_ean_list}
+    syn_qty = {normalize_col_name(x):x for x in syn_qty_list}
 
-    header_row, ean_idx, qty_idx = find_header_and_idxs(df_raw, syn_ean, syn_qty)
-    if header_row is None:
-        st.error(
-            f"Excel musi mieć w nagłówku kolumny EAN ({syn_ean_list}) i Ilość ({syn_qty_list}).\n"
-            "Nie znalazłem ich w żadnym wierszu."
-        )
+    h_row, e_i, q_i = find_header_and_idxs(df, syn_ean, syn_qty)
+    if h_row is None:
+        st.error(f"Excel musi mieć nagłówek EAN {syn_ean_list} i Ilość {syn_qty_list}.")
         st.stop()
 
-    rows = []
-    for _, row in df_raw.iloc[header_row + 1 :].iterrows():
-        ean = clean_ean(row.iloc[ean_idx])
-        qty = clean_qty(row.iloc[qty_idx])
-        if qty <= 0:
-            continue
-        rows.append([ean, qty])
+    out = []
+    for _, r in df.iloc[h_row+1:].iterrows():
+        ean = clean_ean(r.iloc[e_i])
+        qty = clean_qty(r.iloc[q_i])
+        if qty>0: out.append([ean, qty])
+    return pd.DataFrame(out, columns=["Symbol", col_qty_name])
 
-    return pd.DataFrame(rows, columns=[col_name_ean, col_name_qty])
-
-# ----------------------------------------------------------------
-# parsowanie PDF (wspólne dla obu uploaderów)
-# ----------------------------------------------------------------
-def parse_pdf_generic(f, pattern, col_name_qty, col_name_ean="Symbol"):
-    rows = []
+# ── Parsowanie PDF (ten sam dla obu) ──────────────────────────
+PDF_PATTERN = r"\s*\d+\s+(\d{13})\s+.+?\s+([\d\s]+,\d{2})\s+[\d\s]+,\d{2}$"
+def parse_pdf(f, col_qty_name):
+    rows=[]
     with pdfplumber.open(f) as pdf:
-        for page in pdf.pages:
-            text = page.extract_text() or ""
-            for line in text.split("\n"):
-                m = re.match(pattern, line)
-                if not m:
-                    continue
-                ean = clean_ean(m.group(1))
-                qty = clean_qty(m.group(2))
-                if qty <= 0:
-                    continue
-                rows.append([ean, qty])
-    return pd.DataFrame(rows, columns=[col_name_ean, col_name_qty])
+        for p in pdf.pages:
+            for line in (p.extract_text() or "").splitlines():
+                m=re.match(PDF_PATTERN, line)
+                if not m: continue
+                ean, qty = clean_ean(m.group(1)), clean_qty(m.group(2))
+                if qty>0: rows.append([ean, qty])
+    return pd.DataFrame(rows, columns=["Symbol", col_qty_name])
 
-# ----------------------------------------------------------------
-# konfiguracja Streamlita
-# ----------------------------------------------------------------
-st.set_page_config(
-    page_title="📋 Porównywarka Zlecenie/Zamówienie vs. WZ",
-    layout="wide",
-)
-
-st.title("📋 Porównywarka Zlecenie/Zamówienie (Excel lub PDF) vs. WZ (PDF lub Excel)")
-st.markdown("""
-**Instrukcja:**
-1. Wgraj plik Zlecenia/Zamówienia (Excel lub PDF).  
-2. Wgraj plik WZ (PDF lub Excel).  
-3. Aplikacja porówna ilości (EAN → ilość) i pokaże, czy wszystko się zgadza.  
-""")
+# ── Streamlit UI ───────────────────────────────────────────────
+st.set_page_config(page_title="📋 Porównywarka Zlecenie↔WZ", layout="wide")
+st.title("📋 Porównywarka Zlecenie/Zamówienie vs. WZ (Excel lub PDF)")
 
 st.sidebar.header("Krok 1: Zlecenie/Zamówienie")
-uploaded_order = st.sidebar.file_uploader("Wybierz Zlecenie/Zamówienie", type=["xlsx","pdf"])
+up1 = st.sidebar.file_uploader("Wybierz plik", type=["xlsx","pdf"])
 st.sidebar.header("Krok 2: WZ")
-uploaded_wz     = st.sidebar.file_uploader("Wybierz WZ",               type=["pdf","xlsx"])
+up2 = st.sidebar.file_uploader("Wybierz plik", type=["xlsx","pdf"])
 
-if not uploaded_order or not uploaded_wz:
-    st.info("Proszę wgrać oba pliki.")
+if not up1 or not up2:
+    st.info("Wgraj oba pliki.")
     st.stop()
 
-# ------------------------------------
-# 1) Parsowanie Zlecenia/Zamówienia
-# ------------------------------------
-syn_ean_all = ["Symbol","symbol","kod ean","ean","kod produktu","GTIN"]
-syn_qty_all = ["Ilość","Ilosc","Quantity","Qty","sztuki","ilość sztuk zamówiona","zamówiona ilość"]
+# wspólne synonimy
+EAN_SYNS = ["Symbol","symbol","kod ean","ean","kod produktu","gtin"]
+QTY_SYNS = ["Ilość","Ilosc","Quantity","Qty","sztuki","ilość sztuk zamówiona","zamówiona ilość"]
 
-if uploaded_order.name.lower().endswith(".xlsx"):
-    df_order = parse_excel_generic(
-        uploaded_order,
-        syn_ean_list=syn_ean_all,
-        syn_qty_list=syn_qty_all,
-        col_name_qty="Ilość_Zam"
-    )
+# Parsujemy Zlecenie/Zamówienie
+if up1.name.lower().endswith(".xlsx"):
+    df1 = parse_excel(up1, EAN_SYNS, QTY_SYNS, "Ilość_Zam")
 else:
-    # regex: numer, EAN, ... , ilość, jednostka, waga
-    pattern_order = r"\s*\d+\s+(\d{13})\s+.+?\s+([\d\s]+,\d{2})\s+\S+\s+[\d\s]+,\d{2}$"
-    df_order = parse_pdf_generic(
-        uploaded_order,
-        pattern=pattern_order,
-        col_name_qty="Ilość_Zam"
-    )
+    df1 = parse_pdf(up1, "Ilość_Zam")
 
-# -------------------------
-# 2) Parsowanie WZ
-# -------------------------
-if uploaded_wz.name.lower().endswith(".xlsx"):
-    df_wz = parse_excel_generic(
-        uploaded_wz,
-        syn_ean_list=syn_ean_all,     # TE SAME synonimy co wyżej
-        syn_qty_list=syn_qty_all,
-        col_name_qty="Ilość_WZ"
-    )
+# Parsujemy WZ
+if up2.name.lower().endswith(".xlsx"):
+    df2 = parse_excel(up2, EAN_SYNS, QTY_SYNS, "Ilość_WZ")
 else:
-    pattern_wz = r"\s*\d+\s+(\d{13})\s+.+?\s+([\d\s]+,\d{2})\s+[\d\s]+,\d{2}$"
-    df_wz = parse_pdf_generic(
-        uploaded_wz,
-        pattern=pattern_wz,
-        col_name_qty="Ilość_WZ"
-    )
+    df2 = parse_pdf(up2, "Ilość_WZ")
 
-# -------------------------
-# 3) Grupowanie i porównanie
-# -------------------------
-df_ord_g = (
-    df_order.groupby("Symbol", as_index=False)
-            .agg({"Ilość_Zam":"sum"})
-            .rename(columns={"Ilość_Zam":"Zamówiona_ilość"})
-)
-df_wz_g = (
-    df_wz.groupby("Symbol", as_index=False)
-         .agg({"Ilość_WZ":"sum"})
-         .rename(columns={"Ilość_WZ":"Wydana_ilość"})
-)
-
-df_cmp = pd.merge(df_ord_g, df_wz_g, on="Symbol", how="outer", indicator=True)
-df_cmp["Zamówiona_ilość"] = df_cmp["Zamówiona_ilość"].fillna(0)
-df_cmp["Wydana_ilość"]    = df_cmp["Wydana_ilość"].fillna(0)
-df_cmp["Różnica"]         = df_cmp["Zamówiona_ilość"] - df_cmp["Wydana_ilość"]
+# ── Grupowanie i porównanie ────────────────────────────────────
+g1 = df1.groupby("Symbol", as_index=False).sum().rename(columns={"Ilość_Zam":"Zamówiona_ilość"})
+g2 = df2.groupby("Symbol", as_index=False).sum().rename(columns={"Ilość_WZ":"Wydana_ilość"})
+cmp = pd.merge(g1, g2, on="Symbol", how="outer", indicator=True)
+cmp["Zamówiona_ilość"].fillna(0, inplace=True)
+cmp["Wydana_ilość"].fillna(0, inplace=True)
+cmp["Różnica"] = cmp["Zamówiona_ilość"] - cmp["Wydana_ilość"]
 
 def status(r):
-    if r["_merge"]=="left_only":   return "Brak we WZ"
-    if r["_merge"]=="right_only":  return "Brak w zamówieniu"
+    if r["_merge"]=="left_only": return "Brak we WZ"
+    if r["_merge"]=="right_only": return "Brak w zamówieniu"
     return "OK" if r["Różnica"]==0 else "Różni się"
 
-df_cmp["Status"] = df_cmp.apply(status, axis=1)
+cmp["Status"] = cmp.apply(status, axis=1)
 order = ["Różni się","Brak we WZ","Brak w zamówieniu","OK"]
-df_cmp["Status"] = pd.Categorical(df_cmp["Status"], categories=order, ordered=True)
-df_cmp.sort_values(["Status","Symbol"], inplace=True)
+cmp["Status"] = pd.Categorical(cmp["Status"], categories=order, ordered=True)
+cmp.sort_values(["Status","Symbol"], inplace=True)
 
-# -------------------------
-# 4) Wyświetlenie i eksport
-# -------------------------
-def highlight(r):
-    color = "#c6efce" if r["Status"]=="OK" else "#ffc7ce"
-    return [f"background-color: {color}" for _ in r.index]
-
+# ── Wyświetlenie ───────────────────────────────────────────────
+def hl(r): return ["background-color:#c6efce" if r.Status=="OK" else "background-color:#ffc7ce"]*len(r)
 st.markdown("### 📊 Wynik porównania")
-styled = df_cmp.style.format({
-    "Zamówiona_ilość":"{:.0f}",
-    "Wydana_ilość":"{:.0f}",
-    "Różnica":"{:.0f}"
-}).apply(highlight, axis=1)
-st.dataframe(styled, use_container_width=True)
+st.dataframe(cmp.style.format({"Zamówiona_ilość":"{:.0f}","Wydana_ilość":"{:.0f}","Różnica":"{:.0f}"}).apply(hl, axis=1), use_container_width=True)
 
-def to_excel(df):
-    out = BytesIO()
-    writer = pd.ExcelWriter(out, engine="openpyxl")
-    df.to_excel(writer, index=False, sheet_name="Porównanie")
-    writer.close()
-    return out.getvalue()
+# ── Eksport i komunikat ────────────────────────────────────────
+buf=BytesIO(); writer=pd.ExcelWriter(buf, engine="openpyxl"); cmp.to_excel(writer,index=False,sheet_name="Porównanie"); writer.close()
+st.download_button("⬇️ Pobierz raport", data=buf.getvalue(), file_name="raport.xlsx")
 
-st.download_button("⬇️ Pobierz raport Excel",
-    data=to_excel(df_cmp),
-    file_name="porownanie_order_vs_wz.xlsx",
-    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-)
-
-all_ok = (df_cmp["Status"]=="OK").all()
-if all_ok:
+if (cmp.Status=="OK").all():
     st.markdown("<h4 style='color:green;'>✅ Pozycje się zgadzają</h4>", unsafe_allow_html=True)
 else:
     st.markdown("<h4 style='color:red;'>❌ Pozycje się nie zgadzają</h4>", unsafe_allow_html=True)
