@@ -23,8 +23,8 @@ def find_header_and_idxs(df: pd.DataFrame, syn_ean: dict, syn_qty: dict):
     for i, row in df.iterrows():
         norm = [normalize_col_name(v) for v in row.values.astype(str)]
         if any(k in syn_ean for k in norm) and any(k in syn_qty for k in norm):
-            e_i = next(idx for idx,val in enumerate(norm) if val in syn_ean)
-            q_i = next(idx for idx,val in enumerate(norm) if val in syn_qty)
+            e_i = next(idx for idx, val in enumerate(norm) if val in syn_ean)
+            q_i = next(idx for idx, val in enumerate(norm) if val in syn_qty)
             return i, e_i, q_i
     return None, None, None
 
@@ -33,10 +33,12 @@ def parse_excel(f, syn_ean_list, syn_qty_list, col_qty_name):
     df = pd.read_excel(f, dtype=str, header=None)
     syn_ean = {normalize_col_name(x): x for x in syn_ean_list}
     syn_qty = {normalize_col_name(x): x for x in syn_qty_list}
+
     h_row, e_i, q_i = find_header_and_idxs(df, syn_ean, syn_qty)
     if h_row is None:
         st.error(f"Excel musi mieć nagłówek EAN {syn_ean_list} i Ilość {syn_qty_list}.")
         st.stop()
+
     out = []
     for _, r in df.iloc[h_row+1:].iterrows():
         ean = clean_ean(r.iloc[e_i])
@@ -109,7 +111,7 @@ cmp.sort_values(["Status","Symbol"], inplace=True)
 
 # ── Wyświetlenie i eksport ─────────────────────────────────────
 def hl(r):
-    color = "#c6efce" if r.Status=="OK" else "#ffc7ce"
+    color = "#c6efce" if r.Status == "OK" else "#ffc7ce"
     return [f"background-color:{color}"] * len(r)
 
 st.markdown("### 📊 Wynik porównania")
