@@ -20,14 +20,8 @@ def clean_qty(raw: str) -> float:
         return 0.0
 
 def find_header_and_idxs(df: pd.DataFrame, syn_ean_list: list, syn_qty_list: list):
-    """
-    Szuka wiersza nagłówka w dowolnym wierszu.
-    Match wymaga, by nazwa kolumny po normalizacji dokładnie odpowiadała jednemu ze synonimów.
-    Zwraca (wiersz, idx_ean, idx_qty) lub (None, None, None).
-    """
     syn_ean_keys = {normalize_col_name(x) for x in syn_ean_list}
     syn_qty_keys = {normalize_col_name(x) for x in syn_qty_list}
-
     for i, row in df.iterrows():
         norm = [normalize_col_name(str(v)) for v in row.values]
         e_i = next((j for j, cell in enumerate(norm) if cell in syn_ean_keys), None)
@@ -89,25 +83,33 @@ def parse_wz_pdf(f):
 st.set_page_config(page_title="📋 Porównywarka Zlecenie↔WZ", layout="wide")
 st.title("📋 Porównywarka Zlecenie/Zamówienie vs. WZ")
 
-# Instrukcja obsługi od razu
+# Instrukcja obsługi dostępna od razu
 with st.expander("ℹ️ Instrukcja obsługi", expanded=True):
     st.markdown("""
+**Jak to działa?**
+
+1. W pierwszym polu **wgrywasz**:
+   - **Zlecenie transportowe** (PDF)  
+   - lub **Zlecenie wydania** (PDF lub Excel)
+2. W drugim polu **wgrywasz**:
+   - **WZ** (PDF lub Excel)
+
 **Excel (.xlsx)**  
-- Nagłówek (dowolny wiersz) musi mieć **dokładnie** nazwy kolumn po normalizacji:
-  - EAN: Symbol, symbol, Kod EAN, kod ean, Kod produktu, GTIN  
-  - Ilość: Ilość, Ilosc, Quantity, Qty, sztuki, ilość sztuk zamówiona, zamówiona ilość  
-- Aplikacja **nie** będzie dopasowywać części nazw (np. `ilośćwopakowaniu`).  
-- Usuwa sufiks `.0` z EAN i konwertuje `1 638,00` → `1638.00`.
+- Nagłówek może być w dowolnym wierszu, ale kolumny muszą mieć dokładnie nazwy (po normalizacji):  
+  - **EAN**: Symbol, symbol, Kod EAN, kod ean, Kod produktu, GTIN  
+  - **Ilość**: Ilość, Ilosc, Quantity, Qty, sztuki, ilość sztuk zamówiona, zamówiona ilość  
+- Aplikacja usunie sufiks `.0` z EAN i konwertuje ilości w formacie `1 638,00` → `1638.00`.
 
 **PDF – Zlecenie/Zamówienie**  
-- Parsowane wg regex: `(ilość) (jednostka) (EAN)`.
+- Parsowanie według wzorca: ilość → jednostka → EAN.
 
 **PDF – WZ**  
-- Parsowane wg EAN + ostatniego `123 456,78` w linii (omija daty).
+- Parsowanie: 13-cyfrowy EAN gdziekolwiek w linii oraz ostatni fragment `123 456,78`.
 
 **Wynik**  
-- Tabela: Symbol, Zamówiona_ilość, Wydana_ilość, Różnica, Status.  
-- Zielone wiersze = OK; czerwone = rozbieżności/braki.
+- Wyświetlana tabela z kolumnami: Symbol, Zamówiona_ilość, Wydana_ilość, Różnica, Status.  
+- Zielone wiersze = OK; czerwone = rozbieżności/braki.  
+- Przycisk „⬇️ Pobierz raport” pozwoli pobrać gotowy plik Excel.
 """)
 
 st.sidebar.header("Krok 1: Zlecenie/Zamówienie")
@@ -119,11 +121,11 @@ if not up1 or not up2:
     st.info("Proszę wgrać oba pliki.")
     st.stop()
 
-# Synonimy dla Excela (bez normalizacji, lista pełnych nazw)
+# Synonimy dla Excela
 EAN_SYNS = ["Symbol","symbol","kod ean","ean","kod produktu","gtin"]
 QTY_SYNS = ["Ilość","Ilosc","Quantity","Qty","sztuki","ilość sztuk zamówiona","zamówiona ilość"]
 
-# Parsujemy pliki
+# Parsowanie plików
 if up1.name.lower().endswith(".xlsx"):
     df1 = parse_excel(up1, EAN_SYNS, QTY_SYNS, "Ilość_Zam")
 else:
@@ -143,8 +145,10 @@ cmp["Wydana_ilość"].fillna(0, inplace=True)
 cmp["Różnica"] = cmp["Zamówiona_ilość"] - cmp["Wydana_ilość"]
 
 def status(r):
-    if r["_merge"] == "left_only":   return "Brak we WZ"
-    if r["_merge"] == "right_only":  return "Brak w zamówieniu"
+    if r["_merge"] == "left_only":
+        return "Brak we WZ"
+    if r["_merge"] == "right_only":
+        return "Brak w zamówieniu"
     return "OK" if r["Różnica"] == 0 else "Różni się"
 
 cmp["Status"] = cmp.apply(status, axis=1)
@@ -153,7 +157,7 @@ cmp["Status"] = pd.Categorical(cmp["Status"], categories=order, ordered=True)
 cmp.sort_values(["Status","Symbol"], inplace=True)
 
 def highlight_row(row):
-    color = "#c6efce" if row["Status"]=="OK" else "#ffc7ce"
+    color = "#c6efce" if row["Status"] == "OK" else "#ffc7ce"
     return [f"background-color: {color}"] * len(row)
 
 st.markdown("### 📊 Wynik porównania")
@@ -171,7 +175,7 @@ with pd.ExcelWriter(buf, engine="openpyxl") as writer:
 st.download_button("⬇️ Pobierz raport", data=buf.getvalue(), file_name="raport.xlsx",
                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-if (cmp["Status"]=="OK").all():
+if (cmp["Status"] == "OK").all():
     st.markdown("<h4 style='color:green;'>✅ Pozycje się zgadzają</h4>", unsafe_allow_html=True)
 else:
     st.markdown("<h4 style='color:red;'>❌ Pozycje się nie zgadzają</h4>", unsafe_allow_html=True)
