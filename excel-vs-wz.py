@@ -117,7 +117,7 @@ def highlight_row(row):
 st.markdown("### 📊 Wynik porównania")
 st.dataframe(
     cmp.style
-       .format({"Zamówiona_ilość":"{:.0f}","Wydana_ilość":"{:.0f}","Różnica":"{:.0f}"})
+       .format({"Zamówiona_ilość":"{:.0f}", "Wydana_ilość":"{:.0f}", "Różnica":"{:.0f}"})
        .apply(highlight_row, axis=1),
     use_container_width=True
 )
@@ -139,29 +139,18 @@ else:
 
 # ── Instrukcja obsługi (schowana w expanderze) ─────────────────
 with st.expander("🛈 Instrukcja obsługi", expanded=False):
-    st.markdown(
-        """
+    st.markdown("""
 **Jak to działa?**  
 - Wgrywasz dwa pliki: Zlecenie/Zamówienie (pierwszy uploader) i WZ (drugi uploader).  
-- Oba mogą być w formacie Excel lub PDF, niezależnie od siebie.
+- Oba mogą być w formacie **Excel (.xlsx)** lub **PDF**, niezależnie od siebie.
 
 **Dla Excela (.xlsx):**  
 1. Aplikacja sama wyszukuje wiersz nagłówka (może być w dowolnej linii).  
 2. Rozpoznaje kolumnę z kodami **EAN** i kolumnę z **ilościami** wg poniższych synonimów:
-
    - **EAN**: Symbol, symbol, Kod EAN, kod ean, Kod produktu, GTIN  
    - **Ilość**: Ilość, Ilosc, Quantity, Qty, sztuki, ilość sztuk zamówiona, zamówiona ilość  
-
 3. Usuwa z EAN ewentualny sufiks `.0` (np. `4250231542008.0` → `4250231542008`).  
 4. Ilości w formacie `1 638,00` lub `1638,00` poprawnie konwertuje (usuwa spacje, zamienia przecinek na kropkę).
 
 **Dla PDF:**  
-- Aplikacja skanuje każdą linijkę tekstu i szuka wzorca:
-# ── Instrukcja obsługi (schowana w expanderze) ─────────────────
-with st.expander("🛈 Instrukcja obsługi", expanded=False):
-    st.markdown(
-        """
-        **Jak to działa?**
-        …
-        """
-    )
+- Aplikacja skanuje każdą linijkę i wyciąga EAN oraz ilość z wzorca:
