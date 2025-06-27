@@ -62,13 +62,13 @@ def parse_order_pdf(f):
     return pd.DataFrame(rows, columns=["Symbol", "Ilość_Zam"])
 
 # ── Parsowanie PDF dla WZ ───────────────────────────────────────
-WZ_PDF_PATTERN = r"\s*\d+\s+(\d{13})\s+.+?\s+([\d\s]+,\d{2})\s+[\d\s]+,\d{2}$"
 def parse_wz_pdf(f):
+    pattern = re.compile(r"(\d{13}).*?([\d\s]+,\d+)")
     rows = []
     with pdfplumber.open(f) as pdf:
         for page in pdf.pages:
             for line in (page.extract_text() or "").splitlines():
-                m = re.match(WZ_PDF_PATTERN, line)
+                m = pattern.search(line)
                 if not m:
                     continue
                 ean = clean_ean(m.group(1))
@@ -95,11 +95,15 @@ with st.expander("ℹ️ Instrukcja obsługi", expanded=True):
 - Usunie z EAN sufiks `.0`.
 - Ilości w formacie `1 638,00` → `1638.00`.
 
-**PDF:**
-- Zlecenie/Zamówienie: najpierw ilość, potem jednostka, potem EAN.
-- WZ: najpierw EAN, potem dowolne, potem ilość.
+**PDF – Zlecenie/Zamówienie:**
+- Regex wyłapuje najpierw ilość, potem jednostkę, potem EAN.
 
-Wynik to tabela z kolumnami: **Symbol**, **Zamówiona_ilość**, **Wydana_ilość**, **Różnica**, **Status**. Zielone = OK, czerwone = rozbieżności/braki.
+**PDF – WZ:**
+- Regex szuka EAN i następującej po nim ilości gdziekolwiek w linii.
+
+**Wynik:**
+- Tabela: **Symbol**, **Zamówiona_ilość**, **Wydana_ilość**, **Różnica**, **Status**.
+- Zielone wiersze = OK; czerwone = rozbieżności/braki.
 """)
 
 st.sidebar.header("Krok 1: Zlecenie/Zamówienie")
