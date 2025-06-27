@@ -14,8 +14,10 @@ def clean_ean(raw: str) -> str:
 
 def clean_qty(raw: str) -> float:
     s = re.sub(r"\s+", "", str(raw)).replace(",", ".")
-    try: return float(s)
-    except: return 0.0
+    try:
+        return float(s)
+    except:
+        return 0.0
 
 def find_header_and_idxs(df: pd.DataFrame, syn_ean: dict, syn_qty: dict):
     for i, row in df.iterrows():
@@ -62,25 +64,33 @@ st.set_page_config(page_title="📋 Porównywarka Zlecenie↔WZ", layout="wide")
 st.title("📋 Porównywarka Zlecenie/Zamówienie vs. WZ (Excel lub PDF)")
 
 st.sidebar.header("Krok 1: Zlecenie/Zamówienie")
-up1 = st.sidebar.file_uploader("Wybierz plik", type=["xlsx","pdf"])
+up1 = st.sidebar.file_uploader(
+    "Wybierz Zlecenie/Zamówienie", 
+    type=["xlsx","pdf"], 
+    key="file1"
+)
 st.sidebar.header("Krok 2: WZ")
-up2 = st.sidebar.file_uploader("Wybierz plik", type=["xlsx","pdf"])
+up2 = st.sidebar.file_uploader(
+    "Wybierz WZ", 
+    type=["xlsx","pdf"], 
+    key="file2"
+)
 
 if not up1 or not up2:
     st.info("Wgraj oba pliki.")
     st.stop()
 
-# wspólne synonimy
+# ── Wspólne synonimy ────────────────────────────────────────────
 EAN_SYNS = ["Symbol","symbol","kod ean","ean","kod produktu","gtin"]
 QTY_SYNS = ["Ilość","Ilosc","Quantity","Qty","sztuki","ilość sztuk zamówiona","zamówiona ilość"]
 
-# Parsujemy Zlecenie/Zamówienie
+# ── Parsujemy Zlecenie/Zamówienie ───────────────────────────────
 if up1.name.lower().endswith(".xlsx"):
     df1 = parse_excel(up1, EAN_SYNS, QTY_SYNS, "Ilość_Zam")
 else:
     df1 = parse_pdf(up1, "Ilość_Zam")
 
-# Parsujemy WZ
+# ── Parsujemy WZ ────────────────────────────────────────────────
 if up2.name.lower().endswith(".xlsx"):
     df2 = parse_excel(up2, EAN_SYNS, QTY_SYNS, "Ilość_WZ")
 else:
@@ -96,7 +106,7 @@ cmp["Różnica"] = cmp["Zamówiona_ilość"] - cmp["Wydana_ilość"]
 
 def status(r):
     if r["_merge"]=="left_only": return "Brak we WZ"
-    if r["_merge"]=="right_only": return "Brak w zamówieniu"
+    if r["_merge"]=="right_only":return "Brak w zamówieniu"
     return "OK" if r["Różnica"]==0 else "Różni się"
 
 cmp["Status"] = cmp.apply(status, axis=1)
@@ -104,14 +114,25 @@ order = ["Różni się","Brak we WZ","Brak w zamówieniu","OK"]
 cmp["Status"] = pd.Categorical(cmp["Status"], categories=order, ordered=True)
 cmp.sort_values(["Status","Symbol"], inplace=True)
 
-# ── Wyświetlenie ───────────────────────────────────────────────
+# ── Wyświetlenie i eksport ─────────────────────────────────────
 def hl(r): return ["background-color:#c6efce" if r.Status=="OK" else "background-color:#ffc7ce"]*len(r)
 st.markdown("### 📊 Wynik porównania")
-st.dataframe(cmp.style.format({"Zamówiona_ilość":"{:.0f}","Wydana_ilość":"{:.0f}","Różnica":"{:.0f}"}).apply(hl, axis=1), use_container_width=True)
+st.dataframe(
+    cmp.style
+       .format({"Zamówiona_ilość":"{:.0f}","Wydana_ilość":"{:.0f}","Różnica":"{:.0f}"})
+       .apply(hl, axis=1),
+    use_container_width=True
+)
 
-# ── Eksport i komunikat ────────────────────────────────────────
-buf=BytesIO(); writer=pd.ExcelWriter(buf, engine="openpyxl"); cmp.to_excel(writer,index=False,sheet_name="Porównanie"); writer.close()
-st.download_button("⬇️ Pobierz raport", data=buf.getvalue(), file_name="raport.xlsx")
+buf = BytesIO()
+with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+    cmp.to_excel(writer, index=False, sheet_name="Porównanie")
+
+st.download_button(
+    "⬇️ Pobierz raport",
+    data=buf.getvalue(),
+    file_name="raport.xlsx"
+)
 
 if (cmp.Status=="OK").all():
     st.markdown("<h4 style='color:green;'>✅ Pozycje się zgadzają</h4>", unsafe_allow_html=True)
