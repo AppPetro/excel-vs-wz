@@ -83,35 +83,22 @@ def parse_wz_pdf(f):
 st.set_page_config(page_title="📋 Porównywarka Zlecenie↔WZ", layout="wide")
 st.title("📋 Porównywarka Zlecenie/Zamówienie vs. WZ")
 
-# Instrukcja obsługi dostępna od razu
+# Instrukcja od razu dostępna
 with st.expander("ℹ️ Instrukcja obsługi", expanded=True):
     st.markdown("""
 **Jak to działa?**
 
 1. W pierwszym polu **wgrywasz**:
-   - **Zlecenie transportowe** (PDF)  
-   - lub **Zlecenie wydania** (PDF)
-   - lub **Excel**)
+   - Zlecenie transportowe (PDF)  
+   - lub Zlecenie wydania (PDF/Excel)
 2. W drugim polu **wgrywasz**:
-   - **WZ** (PDF)
-   - lub **Excel**
+   - WZ (PDF/Excel)
 
-**Excel (.xlsx)**  
-- Nagłówek może być w dowolnym wierszu, ale kolumny muszą mieć dokładnie nazwy (po normalizacji):  
-  - **EAN**: Symbol, symbol, Kod EAN, kod ean, Kod produktu, GTIN  
-  - **Ilość**: Ilość, Ilosc, Quantity, Qty, sztuki, ilość sztuk zamówiona, zamówiona ilość  
-- Aplikacja usunie sufiks `.0` z EAN i konwertuje ilości w formacie `1 638,00` → `1638.00`.
+Excel: nagłówek gdziekolwiek, kolumny EAN i Ilość wg synonimów.  
+PDF – zamówienie: ilość → jm. → EAN.  
+PDF – WZ: EAN + ostatni fragment `123 456,78`.  
 
-**PDF – Zlecenie/Zamówienie**  
-- Parsowanie według wzorca: ilość → jednostka → EAN.
-
-**PDF – WZ**  
-- Parsowanie: 13-cyfrowy EAN gdziekolwiek w linii oraz ostatni fragment `123 456,78`.
-
-**Wynik**  
-- Wyświetlana tabela z kolumnami: Symbol, Zamówiona_ilość, Wydana_ilość, Różnica, Status.  
-- Zielone wiersze = OK; czerwone = rozbieżności/braki.  
-- Przycisk „⬇️ Pobierz raport” pozwoli pobrać gotowy plik Excel.
+Wynik: Symbol, Zamówiona_ilość, Wydana_ilość, Różnica, Status.
 """)
 
 st.sidebar.header("Krok 1: Zlecenie/Zamówienie")
@@ -123,34 +110,31 @@ if not up1 or not up2:
     st.info("Proszę wgrać oba pliki.")
     st.stop()
 
-# Synonimy dla Excela
 EAN_SYNS = ["Symbol","symbol","kod ean","ean","kod produktu","gtin"]
 QTY_SYNS = ["Ilość","Ilosc","Quantity","Qty","sztuki","ilość sztuk zamówiona","zamówiona ilość"]
 
-# Parsowanie plików
+# Parsowanie
 if up1.name.lower().endswith(".xlsx"):
     df1 = parse_excel(up1, EAN_SYNS, QTY_SYNS, "Ilość_Zam")
 else:
     df1 = parse_order_pdf(up1)
-
 if up2.name.lower().endswith(".xlsx"):
     df2 = parse_excel(up2, EAN_SYNS, QTY_SYNS, "Ilość_WZ")
 else:
     df2 = parse_wz_pdf(up2)
 
-# Grupowanie i porównanie
+# Porównanie
 g1 = df1.groupby("Symbol", as_index=False).sum().rename(columns={"Ilość_Zam":"Zamówiona_ilość"})
 g2 = df2.groupby("Symbol", as_index=False).sum().rename(columns={"Ilość_WZ":"Wydana_ilość"})
 cmp = pd.merge(g1, g2, on="Symbol", how="outer", indicator=True)
-cmp["Zamówiona_ilość"].fillna(0, inplace=True)
-cmp["Wydana_ilość"].fillna(0, inplace=True)
+# zamiast .fillna(…, inplace=True) używamy przypisania :contentReference[oaicite:0]{index=0}
+cmp["Zamówiona_ilość"] = cmp["Zamówiona_ilość"].fillna(0)
+cmp["Wydana_ilość"]    = cmp["Wydana_ilość"].fillna(0)
 cmp["Różnica"] = cmp["Zamówiona_ilość"] - cmp["Wydana_ilość"]
 
 def status(r):
-    if r["_merge"] == "left_only":
-        return "Brak we WZ"
-    if r["_merge"] == "right_only":
-        return "Brak w zamówieniu"
+    if r["_merge"] == "left_only":   return "Brak we WZ"
+    if r["_merge"] == "right_only":  return "Brak w zamówieniu"
     return "OK" if r["Różnica"] == 0 else "Różni się"
 
 cmp["Status"] = cmp.apply(status, axis=1)
@@ -159,7 +143,7 @@ cmp["Status"] = pd.Categorical(cmp["Status"], categories=order, ordered=True)
 cmp.sort_values(["Status","Symbol"], inplace=True)
 
 def highlight_row(row):
-    color = "#c6efce" if row["Status"] == "OK" else "#ffc7ce"
+    color = "#c6efce" if row["Status"]=="OK" else "#ffc7ce"
     return [f"background-color: {color}"] * len(row)
 
 st.markdown("### 📊 Wynik porównania")
