@@ -35,7 +35,7 @@ def parse_excel(f, syn_ean_list, syn_qty_list, col_qty_name):
     syn_qty = {normalize_col_name(x): x for x in syn_qty_list}
     h_row, e_i, q_i = find_header_and_idxs(df, syn_ean, syn_qty)
     if h_row is None:
-        st.error(f"Excel musi mieć w nagłówku kolumny EAN {syn_ean_list} i Ilość {syn_qty_list}.")
+        st.error(f"Excel musi mieć nagłówek kolumny EAN {syn_ean_list} i Ilość {syn_qty_list}.")
         st.stop()
     rows = []
     for _, r in df.iloc[h_row+1:].iterrows():
@@ -61,14 +61,15 @@ def parse_order_pdf(f):
                     rows.append([ean, qty])
     return pd.DataFrame(rows, columns=["Symbol", "Ilość_Zam"])
 
-# ── Parsowanie PDF dla WZ ───────────────────────────────────────
+# ── Parsowanie PDF dla WZ (poprawiony regex) ────────────────────
 def parse_wz_pdf(f):
-    pattern = re.compile(r"(\d{13}).*?([\d\s]+,\d+)")
+    # wychwytujemy 13-cyfrowy EAN i ilość z dokładnie 2 miejscami po przecinku
+    wz_pattern = re.compile(r"(\d{13}).*?([\d\s]+,\d{2})(?!\d)")
     rows = []
     with pdfplumber.open(f) as pdf:
         for page in pdf.pages:
             for line in (page.extract_text() or "").splitlines():
-                m = pattern.search(line)
+                m = wz_pattern.search(line)
                 if not m:
                     continue
                 ean = clean_ean(m.group(1))
@@ -81,7 +82,7 @@ def parse_wz_pdf(f):
 st.set_page_config(page_title="📋 Porównywarka Zlecenie↔WZ", layout="wide")
 st.title("📋 Porównywarka Zlecenie/Zamówienie vs. WZ")
 
-# ── Instrukcja obsługi (dostępna od razu) ───────────────────────
+# ── Instrukcja obsługi ──────────────────────────────────────────
 with st.expander("ℹ️ Instrukcja obsługi", expanded=True):
     st.markdown("""
 **Jak to działa?**
@@ -96,10 +97,10 @@ with st.expander("ℹ️ Instrukcja obsługi", expanded=True):
 - Ilości w formacie `1 638,00` → `1638.00`.
 
 **PDF – Zlecenie/Zamówienie:**
-- Regex wyłapuje najpierw ilość, potem jednostkę, potem EAN.
+- Wyłapuje najpierw ilość, potem jednostkę, potem EAN (`ORDER_PDF_PATTERN`).
 
 **PDF – WZ:**
-- Regex szuka EAN i następującej po nim ilości gdziekolwiek w linii.
+- Szuka EAN i natychmiastowej po nim ilości z dokładnie 2 miejscami po przecinku (`wz_pattern`).
 
 **Wynik:**
 - Tabela: **Symbol**, **Zamówiona_ilość**, **Wydana_ilość**, **Różnica**, **Status**.
@@ -115,17 +116,16 @@ if not up1 or not up2:
     st.info("Proszę wgrać oba pliki.")
     st.stop()
 
-# ── Definicje synonimów ─────────────────────────────────────────
+# ── Synonimy kolumn ─────────────────────────────────────────────
 EAN_SYNS = ["Symbol","symbol","kod ean","ean","kod produktu","gtin"]
 QTY_SYNS = ["Ilość","Ilosc","Quantity","Qty","sztuki","ilość sztuk zamówiona","zamówiona ilość"]
 
-# ── Parsowanie Zlecenia/Zamówienia ──────────────────────────────
+# ── Parsowanie plików ──────────────────────────────────────────
 if up1.name.lower().endswith(".xlsx"):
     df1 = parse_excel(up1, EAN_SYNS, QTY_SYNS, "Ilość_Zam")
 else:
     df1 = parse_order_pdf(up1)
 
-# ── Parsowanie WZ ───────────────────────────────────────────────
 if up2.name.lower().endswith(".xlsx"):
     df2 = parse_excel(up2, EAN_SYNS, QTY_SYNS, "Ilość_WZ")
 else:
@@ -135,9 +135,9 @@ else:
 g1 = df1.groupby("Symbol", as_index=False).sum().rename(columns={"Ilość_Zam":"Zamówiona_ilość"})
 g2 = df2.groupby("Symbol", as_index=False).sum().rename(columns={"Ilość_WZ":"Wydana_ilość"})
 cmp = pd.merge(g1, g2, on="Symbol", how="outer", indicator=True)
-cmp["Zamówiona_ilość"] = cmp["Zamówiona_ilość"].fillna(0)
-cmp["Wydana_ilość"]    = cmp["Wydana_ilość"].fillna(0)
-cmp["Różnica"]         = cmp["Zamówiona_ilość"] - cmp["Wydana_ilość"]
+cmp["Zamówiona_ilość"].fillna(0, inplace=True)
+cmp["Wydana_ilość"].fillna(0, inplace=True)
+cmp["Różnica"] = cmp["Zamówiona_ilość"] - cmp["Wydana_ilość"]
 
 def status(r):
     if r["_merge"] == "left_only":   return "Brak we WZ"
