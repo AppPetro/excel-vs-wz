@@ -4,8 +4,23 @@ import pdfplumber
 import re
 from io import BytesIO
 
+# ----------------------------------------------------------------
+# funkcja pomocnicza do normalizacji nazw kolumn (musi być przed parserami!)
+# ----------------------------------------------------------------
+def normalize_col_name(name: str) -> str:
+    return (
+        name
+        .lower()
+        .replace(" ", "")
+        .replace("\xa0", "")
+        .replace("_", "")
+    )
+
+# ----------------------------------------------------------------
+# konfiguracja Streamlita
+# ----------------------------------------------------------------
 st.set_page_config(
-    page_title="📋 Porównywarka Zamówienie/Zlecenie vs. WZ",
+    page_title="📋 Porównywarka Zlecenie/Zamówienie vs. WZ",
     layout="wide",
 )
 
@@ -107,7 +122,6 @@ def parse_order_pdf(f):
                 rows.append([raw_ean, qty])
     return pd.DataFrame(rows, columns=["Symbol","Ilość_Zam"])
 
-# wybierz parser w zależności od typu pliku
 if uploaded_order.name.lower().endswith(".xlsx"):
     df_order = parse_order_excel(uploaded_order)
 else:
@@ -150,7 +164,6 @@ def parse_wz_pdf(f):
         for page in pdf.pages:
             text = page.extract_text() or ""
             for line in text.split("\n"):
-                # numer, EAN, ... , ilość, waga
                 m = re.match(
                     r"\s*\d+\s+(\d{13})\s+.+?\s+([\d\s]+,\d{2})\s+[\d\s]+,\d{2}$",
                     line
