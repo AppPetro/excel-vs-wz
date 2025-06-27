@@ -46,13 +46,13 @@ def parse_excel(f, syn_ean_list, syn_qty_list, col_qty_name):
     return pd.DataFrame(rows, columns=["Symbol", col_qty_name])
 
 # ── Parsowanie PDF dla Zlecenia/Zamówienia ───────────────────────
-ORDER_PDF_PATTERN = r"\s*\d+\s+.+?\s+([\d\s]+,\d+)\s+\S+\s+(\d{13})"
+ORDER_PDF_PATTERN = re.compile(r"\s*\d+\s+.+?\s+([\d\s]+,\d+)\s+\S+\s+(\d{13})")
 def parse_order_pdf(f):
     rows = []
     with pdfplumber.open(f) as pdf:
         for page in pdf.pages:
             for line in (page.extract_text() or "").splitlines():
-                m = re.match(ORDER_PDF_PATTERN, line)
+                m = ORDER_PDF_PATTERN.match(line)
                 if not m:
                     continue
                 qty = clean_qty(m.group(1))
@@ -61,19 +61,21 @@ def parse_order_pdf(f):
                     rows.append([ean, qty])
     return pd.DataFrame(rows, columns=["Symbol", "Ilość_Zam"])
 
-# ── Parsowanie PDF dla WZ (poprawiony regex) ────────────────────
+# ── Parsowanie PDF dla WZ ───────────────────────────────────────
 def parse_wz_pdf(f):
-    # wychwytujemy 13-cyfrowy EAN i ilość z dokładnie 2 miejscami po przecinku
-    wz_pattern = re.compile(r"(\d{13}).*?([\d\s]+,\d{2})(?!\d)")
     rows = []
     with pdfplumber.open(f) as pdf:
         for page in pdf.pages:
             for line in (page.extract_text() or "").splitlines():
-                m = wz_pattern.search(line)
-                if not m:
+                # znajdź 13-cyfrowy EAN
+                ean_m = re.search(r"\b(\d{13})\b", line)
+                # znajdź wszystkie fragmenty typu "123 456,78"
+                qty_matches = re.findall(r"[\d\s]+,\d{2}", line)
+                if not ean_m or not qty_matches:
                     continue
-                ean = clean_ean(m.group(1))
-                qty = clean_qty(m.group(2))
+                ean = clean_ean(ean_m.group(1))
+                # ostatni match to ilość (unika dat, które nie mają przecinka)
+                qty = clean_qty(qty_matches[-1])
                 if qty > 0:
                     rows.append([ean, qty])
     return pd.DataFrame(rows, columns=["Symbol", "Ilość_WZ"])
@@ -87,24 +89,25 @@ with st.expander("ℹ️ Instrukcja obsługi", expanded=True):
     st.markdown("""
 **Jak to działa?**
 
-1. Wgraj plik Zlecenia/Zamówienia (Excel lub PDF).
-2. Wgraj plik WZ (Excel lub PDF).
+1. Wgraj plik Zlecenia/Zamówienia (Excel lub PDF).  
+2. Wgraj plik WZ (Excel lub PDF).  
 
-**Excel (.xlsx):**
-- Aplikacja sama znajdzie wiersz nagłówka.
-- Rozpozna kolumny **EAN** i **Ilość** (szeroki zestaw synonimów).
-- Usunie z EAN sufiks `.0`.
-- Ilości w formacie `1 638,00` → `1638.00`.
+**Excel (.xlsx):**  
+- Aplikacja sama znajdzie wiersz nagłówka.  
+- Rozpozna kolumny **EAN** i **Ilość** (szeroki zestaw synonimów).  
+- Usunie z EAN sufiks `.0`.  
+- Ilości w formacie `1 638,00` → `1638.00`.  
 
-**PDF – Zlecenie/Zamówienie:**
-- Wyłapuje najpierw ilość, potem jednostkę, potem EAN (`ORDER_PDF_PATTERN`).
+**PDF – Zlecenie/Zamówienie:**  
+- Regex wyłapuje najpierw ilość, potem jednostkę, potem EAN.  
 
-**PDF – WZ:**
-- Szuka EAN i natychmiastowej po nim ilości z dokładnie 2 miejscami po przecinku (`wz_pattern`).
+**PDF – WZ:**  
+- Szuka 13-cyfrowego EAN oraz **ostatniego** fragmentu `123 456,78` w linii (omija daty).  
 
-**Wynik:**
-- Tabela: **Symbol**, **Zamówiona_ilość**, **Wydana_ilość**, **Różnica**, **Status**.
-- Zielone wiersze = OK; czerwone = rozbieżności/braki.
+**Wynik:**  
+- Tabela: **Symbol**, **Zamówiona_ilość**, **Wydana_ilość**, **Różnica**, **Status**.  
+- Zielone wiersze = OK; czerwone = rozbieżności/braki.  
+- Kliknij „⬇️ Pobierz raport”, aby ściągnąć gotowe zestawienie.
 """)
 
 st.sidebar.header("Krok 1: Zlecenie/Zamówienie")
@@ -116,9 +119,9 @@ if not up1 or not up2:
     st.info("Proszę wgrać oba pliki.")
     st.stop()
 
-# ── Synonimy kolumn ─────────────────────────────────────────────
+# ── Synonimy kolumn (Excel) ─────────────────────────────────────
 EAN_SYNS = ["Symbol","symbol","kod ean","ean","kod produktu","gtin"]
-QTY_SYNS = ["Ilość","Ilosc","Quantity","Qty","sztuki","ilość sztuk zamówiona","zamówiona ilość"]
+QTY_SYNS = ["Ilość","Ilosc","Quantity","Qty","sztuki","ilość&nbsp;sztuk&nbsp;zamówiona","zamówiona ilość"]
 
 # ── Parsowanie plików ──────────────────────────────────────────
 if up1.name.lower().endswith(".xlsx"):
@@ -131,7 +134,7 @@ if up2.name.lower().endswith(".xlsx"):
 else:
     df2 = parse_wz_pdf(up2)
 
-# ── Grupowanie i porównanie ────────────────────────────────────
+# ── Porównanie ─────────────────────────────────────────────────
 g1 = df1.groupby("Symbol", as_index=False).sum().rename(columns={"Ilość_Zam":"Zamówiona_ilość"})
 g2 = df2.groupby("Symbol", as_index=False).sum().rename(columns={"Ilość_WZ":"Wydana_ilość"})
 cmp = pd.merge(g1, g2, on="Symbol", how="outer", indicator=True)
@@ -140,14 +143,14 @@ cmp["Wydana_ilość"].fillna(0, inplace=True)
 cmp["Różnica"] = cmp["Zamówiona_ilość"] - cmp["Wydana_ilość"]
 
 def status(r):
-    if r["_merge"] == "left_only":   return "Brak we WZ"
-    if r["_merge"] == "right_only":  return "Brak w zamówieniu"
+    if r["_merge"] == "left_only":
+        return "Brak we WZ"
+    if r["_merge"] == "right_only":
+        return "Brak w zamówieniu"
     return "OK" if r["Różnica"] == 0 else "Różni się"
 
 cmp["Status"] = cmp.apply(status, axis=1)
-order = ["Różni się","Brak we WZ","Brak w zamówieniu","OK"]
-cmp["Status"] = pd.Categorical(cmp["Status"], categories=order, ordered=True)
-cmp.sort_values(["Status","Symbol"], inplace=True)
+cmp = cmp.sort_values(by=["Status","Symbol"], key=lambda s: s.map({"Różni się":0,"Brak we WZ":1,"Brak w zamówieniu":2,"OK":3}))
 
 def highlight_row(row):
     color = "#c6efce" if row["Status"] == "OK" else "#ffc7ce"
@@ -156,7 +159,7 @@ def highlight_row(row):
 st.markdown("### 📊 Wynik porównania")
 st.dataframe(
     cmp.style
-       .format({"Zamówiona_ilość":"{:.0f}", "Wydana_ilość":"{:.0f}", "Różnica":"{:.0f}"})
+       .format({"Zamówiona_ilość":"{:.0f}","Wydana_ilość":"{:.0f}","Różnica":"{:.0f}"})
        .apply(highlight_row, axis=1),
     use_container_width=True
 )
@@ -165,11 +168,8 @@ buf = BytesIO()
 with pd.ExcelWriter(buf, engine="openpyxl") as writer:
     cmp.to_excel(writer, index=False, sheet_name="Porównanie")
 
-st.download_button("⬇️ Pobierz raport",
-    data=buf.getvalue(),
-    file_name="raport.xlsx",
-    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-)
+st.download_button("⬇️ Pobierz raport", data=buf.getvalue(), file_name="raport.xlsx",
+                   mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 if (cmp["Status"] == "OK").all():
     st.markdown("<h4 style='color:green;'>✅ Pozycje się zgadzają</h4>", unsafe_allow_html=True)
