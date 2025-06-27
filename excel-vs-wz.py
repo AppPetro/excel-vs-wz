@@ -187,4 +187,35 @@ df_cmp["Status"] = pd.Categorical(df_cmp["Status"], categories=order, ordered=Tr
 df_cmp.sort_values(["Status","Symbol"], inplace=True)
 
 # -------------------------
-# 4) Wyświetl
+# 4) Wyświetlenie i eksport
+# -------------------------
+def highlight(r):
+    color = "#c6efce" if r["Status"]=="OK" else "#ffc7ce"
+    return [f"background-color: {color}" for _ in r.index]
+
+st.markdown("### 📊 Wynik porównania")
+styled = df_cmp.style.format({
+    "Zamówiona_ilość":"{:.0f}",
+    "Wydana_ilość":"{:.0f}",
+    "Różnica":"{:.0f}"
+}).apply(highlight, axis=1)
+st.dataframe(styled, use_container_width=True)
+
+def to_excel(df):
+    out = BytesIO()
+    writer = pd.ExcelWriter(out, engine="openpyxl")
+    df.to_excel(writer, index=False, sheet_name="Porównanie")
+    writer.close()
+    return out.getvalue()
+
+st.download_button("⬇️ Pobierz raport Excel",
+    data=to_excel(df_cmp),
+    file_name="porownanie_order_vs_wz.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+)
+
+all_ok = (df_cmp["Status"]=="OK").all()
+if all_ok:
+    st.markdown("<h4 style='color:green;'>✅ Pozycje się zgadzają</h4>", unsafe_allow_html=True)
+else:
+    st.markdown("<h4 style='color:red;'>❌ Pozycje się nie zgadzają</h4>", unsafe_allow_html=True)
