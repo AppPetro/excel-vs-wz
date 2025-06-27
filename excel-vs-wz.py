@@ -19,29 +19,29 @@ def clean_qty(raw: str) -> float:
     except:
         return 0.0
 
-def find_header_and_idxs(df: pd.DataFrame, syn_ean_keys: list, syn_qty_keys: list):
+def find_header_and_idxs(df: pd.DataFrame, syn_ean_list: list, syn_qty_list: list):
     """
-    Szuka nagłówka w dowolnym wierszu.
-    Zwraca (wiersz, idx_ean, idx_qty).
-    Match, jeśli którykolwiek synonim jest substringiem nazwy kolumny.
+    Szuka wiersza nagłówka w dowolnym wierszu.
+    Match wymaga, by nazwa kolumny po normalizacji dokładnie odpowiadała jednemu ze synonimów.
+    Zwraca (wiersz, idx_ean, idx_qty) lub (None, None, None).
     """
+    syn_ean_keys = {normalize_col_name(x) for x in syn_ean_list}
+    syn_qty_keys = {normalize_col_name(x) for x in syn_qty_list}
+
     for i, row in df.iterrows():
         norm = [normalize_col_name(str(v)) for v in row.values]
-        # znajdź indeksy, gdzie header zawiera synonim
-        e_i = next((j for j, cell in enumerate(norm)
-                    for syn in syn_ean_keys if syn in cell), None)
-        q_i = next((j for j, cell in enumerate(norm)
-                    for syn in syn_qty_keys if syn in cell), None)
+        e_i = next((j for j, cell in enumerate(norm) if cell in syn_ean_keys), None)
+        q_i = next((j for j, cell in enumerate(norm) if cell in syn_qty_keys), None)
         if e_i is not None and q_i is not None:
             return i, e_i, q_i
     return None, None, None
 
 # ── Parsowanie Excela (uniwersalne) ─────────────────────────────
-def parse_excel(f, syn_ean_keys, syn_qty_keys, col_qty_name):
+def parse_excel(f, syn_ean_list, syn_qty_list, col_qty_name):
     df = pd.read_excel(f, dtype=str, header=None)
-    h_row, e_i, q_i = find_header_and_idxs(df, syn_ean_keys, syn_qty_keys)
+    h_row, e_i, q_i = find_header_and_idxs(df, syn_ean_list, syn_qty_list)
     if h_row is None:
-        st.error(f"Excel musi mieć w nagłówku kolumny EAN ({syn_ean_keys}) i Ilość ({syn_qty_keys}).")
+        st.error(f"Excel musi mieć w nagłówku kolumny EAN ({syn_ean_list}) i Ilość ({syn_qty_list}).")
         st.stop()
     rows = []
     for _, r in df.iloc[h_row+1:].iterrows():
@@ -73,49 +73,40 @@ def parse_wz_pdf(f):
     with pdfplumber.open(f) as pdf:
         for page in pdf.pages:
             for line in (page.extract_text() or "").splitlines():
-                # znajdź EAN
                 ean_m = re.search(r"\b(\d{13})\b", line)
                 if not ean_m:
                     continue
-                # znajdź wszystkie liczby z przecinkiem (ilości)
                 qty_matches = re.findall(r"[\d\s]+,\d{2}", line)
                 if not qty_matches:
                     continue
                 ean = clean_ean(ean_m.group(1))
-                # ostatni match to ilość, wcześniejsze to np. daty
                 qty = clean_qty(qty_matches[-1])
                 if qty > 0:
                     rows.append([ean, qty])
     return pd.DataFrame(rows, columns=["Symbol", "Ilość_WZ"])
 
-# ── UI ──────────────────────────────────────────────────────────
+# ── Streamlit UI ────────────────────────────────────────────────
 st.set_page_config(page_title="📋 Porównywarka Zlecenie↔WZ", layout="wide")
 st.title("📋 Porównywarka Zlecenie/Zamówienie vs. WZ")
 
 # Instrukcja obsługi od razu
 with st.expander("ℹ️ Instrukcja obsługi", expanded=True):
     st.markdown("""
-**Jak to działa?**
+**Excel (.xlsx)**  
+- Nagłówek (dowolny wiersz) musi mieć **dokładnie** nazwy kolumn po normalizacji:
+  - EAN: Symbol, symbol, Kod EAN, kod ean, Kod produktu, GTIN  
+  - Ilość: Ilość, Ilosc, Quantity, Qty, sztuki, ilość sztuk zamówiona, zamówiona ilość  
+- Aplikacja **nie** będzie dopasowywać części nazw (np. `ilośćwopakowaniu`).  
+- Usuwa sufiks `.0` z EAN i konwertuje `1 638,00` → `1638.00`.
 
-1. Wgraj plik Zlecenia/Zamówienia (Excel lub PDF).  
-2. Wgraj plik WZ (Excel lub PDF).  
+**PDF – Zlecenie/Zamówienie**  
+- Parsowane wg regex: `(ilość) (jednostka) (EAN)`.
 
-**Excel (.xlsx):**  
-- Aplikacja sama znajdzie wiersz nagłówka.  
-- W kolumnie EAN rozpoznaje synonimy:  
-  `Symbol, symbol, kod ean, ean, kod produktu, gtin`  
-- W kolumnie Ilość rozpoznaje synonimy:  
-  `ilość, ilosc, quantity, qty, sztuki, ilość sztuk zamówiona, zamówiona ilość`  
-- Usuwa sufiks `.0` z EAN; konwertuje `1 638,00` → `1638.00`.  
+**PDF – WZ**  
+- Parsowane wg EAN + ostatniego `123 456,78` w linii (omija daty).
 
-**PDF – Zlecenie/Zamówienie:**  
-- Regex wyłapuje w linii `(ilość) (j.m.) (EAN)`.  
-
-**PDF – WZ:**  
-- Szuka 13-cyfrowego EAN i **ostatniego** fragmentu `123 456,78` (omija daty).  
-
-**Wynik:**  
-- Tabela: **Symbol**, **Zamówiona_ilość**, **Wydana_ilość**, **Różnica**, **Status**.  
+**Wynik**  
+- Tabela: Symbol, Zamówiona_ilość, Wydana_ilość, Różnica, Status.  
 - Zielone wiersze = OK; czerwone = rozbieżności/braki.
 """)
 
@@ -128,9 +119,9 @@ if not up1 or not up2:
     st.info("Proszę wgrać oba pliki.")
     st.stop()
 
-# Synonimy dla Excela
-EAN_SYNS = ["symbol","kodean","kodproduktu","gtin"]  # normalize_col_name: lowercase, no spaces
-QTY_SYNS = ["ilość","ilosc","quantity","qty","sztuki","ilośćsztukzamówiona","zamówionailość"]
+# Synonimy dla Excela (bez normalizacji, lista pełnych nazw)
+EAN_SYNS = ["Symbol","symbol","kod ean","ean","kod produktu","gtin"]
+QTY_SYNS = ["Ilość","Ilosc","Quantity","Qty","sztuki","ilość sztuk zamówiona","zamówiona ilość"]
 
 # Parsujemy pliki
 if up1.name.lower().endswith(".xlsx"):
