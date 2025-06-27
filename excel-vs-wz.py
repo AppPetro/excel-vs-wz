@@ -5,7 +5,7 @@ import re
 from io import BytesIO
 
 # ----------------------------------------------------------------
-# funkcja pomocnicza do normalizacji nazw kolumn (musi być przed parserami!)
+# funkcja pomocnicza do normalizacji nazw kolumn
 # ----------------------------------------------------------------
 def normalize_col_name(name: str) -> str:
     return (
@@ -87,7 +87,10 @@ def parse_order_excel(f):
 
     rows = []
     for _, row in df_raw.iloc[header_row+1:].iterrows():
-        raw_ean = str(row.iloc[col_ean_idx]).strip().rstrip(".0")
+        raw_ean = str(row.iloc[col_ean_idx]).strip()
+        # obetnij dokładnie sufix ".0", jeśli istnieje
+        if raw_ean.endswith(".0"):
+            raw_ean = raw_ean[:-2]
         raw_qty = str(row.iloc[col_qty_idx]).strip()
         raw_qty = re.sub(r"\s+", "", raw_qty).replace(",", ".")
         if not raw_qty or raw_qty.lower() == "nan":
@@ -144,7 +147,14 @@ def parse_wz_excel(f):
         )
         st.stop()
 
-    tmp = df_raw[col_ean].astype(str).str.strip().str.split().str[-1]
+    tmp = (
+        df_raw[col_ean]
+          .astype(str)
+          .str.strip()
+          .str.replace(r"\.0$", "", regex=True)  # usuń sufix ".0"
+          .str.split()
+          .str[-1]
+    )
     mask = tmp.str.fullmatch(r"\d{13}")
     df = pd.DataFrame({
         "Symbol": tmp[mask],
