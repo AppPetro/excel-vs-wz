@@ -64,7 +64,7 @@ if ext_order == "pdf":
                     if not m:
                         continue
                     raw_q, raw_ean = m.group(1), m.group(2)
-                    raw_qty = raw_q.replace(" ", "").replace(",", ".")
+                    raw_qty = re.sub(r"\s+", "", raw_q).replace(",", ".")
                     try:
                         qty = float(raw_qty)
                     except:
@@ -84,10 +84,13 @@ else:
     except Exception as e:
         st.error(f"Błąd wczytywania Excela Zlecenia/Zamówienia:\n```{e}```")
         st.stop()
+    # Synonimy kolumn
+    syn_ean_ord = {normalize_col_name(c): c for c in [
+        "EAN", "Kod EAN", "GTIN", "kod ean", "kod produktu", "symbol"
+    ]}
     syn_qty_ord = {normalize_col_name(c): c for c in [
         "Ilość", "Ilosc", "Quantity", "Qty", "sztuki", "ilość sztuk", "ilość sztuk zamówiona", "zamówiona ilość", "quantity ordered", "qty ordered"
     ]}
-    syn_qty_ord = {normalize_col_name(c): c for c in ["Ilość","Ilosc","Quantity","Qty","sztuki"]}
     header_idx = None
     for idx, row in df_temp.iterrows():
         cols = [normalize_col_name(str(x)) for x in row.tolist()]
@@ -133,7 +136,7 @@ if ext_wz == "pdf":
                     if not m:
                         continue
                     raw_ean, raw_q = m.group(1), m.group(2)
-                    raw_qty = raw_q.replace(" ", "").replace(",", ".")
+                    raw_qty = re.sub(r"\s+", "", raw_q).replace(",", ".")
                     try:
                         qty = float(raw_qty)
                     except:
@@ -166,7 +169,8 @@ else:
         st.stop()
     df_wz = pd.DataFrame({
         "Symbol": df_wz_raw[col_ean_wz].astype(str).str.strip().str.split().str[-1],
-        "Ilość_WZ": pd.to_numeric(df_wz_raw[col_qty_wz].astype(str).str.replace(r"\s+", "", regex=True).str.replace(",", "."), errors="coerce").fillna(0)
+        "Ilość_WZ": pd.to_numeric(df_wz_raw[col_qty_wz].astype(str).str.replace(r"\s+", "", regex=True).
+            str.replace(",", "."), errors="coerce").fillna(0)
     })
 
 # -------------------------
