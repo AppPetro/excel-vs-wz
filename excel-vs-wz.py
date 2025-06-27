@@ -1,62 +1,241 @@
+import streamlit as st
+import pandas as pd
+import pdfplumber
+import re
+from io import BytesIO
+
+st.set_page_config(
+    page_title="📋 Porównywarka Zamówienie/Zlecenie vs. WZ",
+    layout="wide",
+)
+
+st.title("📋 Porównywarka Zlecenie/Zamówienie (Excel lub PDF) vs. WZ (PDF lub Excel)")
+st.markdown("""
+**Instrukcja:**
+1. Wgraj plik Zlecenia/Zamówienia (Excel lub PDF).  
+2. Wgraj plik WZ (PDF lub Excel).  
+3. Aplikacja porówna ilości (EAN → ilość) i pokaże, czy wszystko się zgadza.  
+""")
+
 # -------------------------
-# 2) Parsowanie zamówienia (Excel)
+# 1) Wgrywanie plików
 # -------------------------
-try:
-    # Wczytujemy bez nagłówka, bo sami go będziemy szukać
-    df_order_raw = pd.read_excel(uploaded_order, dtype=str, header=None)
-except Exception as e:
-    st.error(f"Nie udało się wczytać pliku zamówienia:\n```{e}```")
+st.sidebar.header("Krok 1: Zlecenie/Zamówienie")
+uploaded_order = st.sidebar.file_uploader(
+    "Wybierz plik zamówienia (Excel lub PDF)",
+    type=["xlsx", "pdf"]
+)
+st.sidebar.header("Krok 2: WZ")
+uploaded_wz = st.sidebar.file_uploader(
+    "Wybierz plik WZ (PDF lub Excel)",
+    type=["pdf", "xlsx"]
+)
+
+if not uploaded_order or not uploaded_wz:
+    st.info("Proszę wgrać oba pliki: Zlecenie/Zamówienie oraz WZ.")
     st.stop()
 
-# Synonimy kolumn
-syn_ean_ord = {
-    normalize_col_name(c): c for c in [
+# -------------------------
+# 2) Parsowanie Zlecenia/Zamówienia
+# -------------------------
+def parse_order_excel(f):
+    df_raw = pd.read_excel(f, dtype=str, header=None)
+    syn_ean = { normalize_col_name(c): c for c in [
         "Symbol","symbol","kod ean","ean","kod produktu","GTIN"
-    ]
-}
-syn_qty_ord = {
-    normalize_col_name(c): c for c in [
-        "Ilość","Ilosc","Quantity","Qty","sztuki","ilość sztuk zamówiona","zamówiona ilość"
-    ]
-}
+    ] }
+    syn_qty = { normalize_col_name(c): c for c in [
+        "Ilość","Ilosc","Quantity","Qty","sztuki",
+        "ilość sztuk zamówiona","zamówiona ilość"
+    ] }
 
-# Znajdź wiersz nagłówka
-header_row = None
-for idx, row in df_order_raw.iterrows():
-    norm = [normalize_col_name(str(v)) for v in row.values]
-    if any(h in syn_ean_ord for h in norm) and any(h in syn_qty_ord for h in norm):
-        header = list(row.values)
-        header_row = idx
-        break
+    # znajdź wiersz z nagłówkiem
+    header_row = None
+    for idx, row in df_raw.iterrows():
+        norm = [ normalize_col_name(str(v)) for v in row.values ]
+        if any(h in syn_ean for h in norm) and any(h in syn_qty for h in norm):
+            header = row.values.tolist()
+            header_row = idx
+            break
 
-if header_row is None:
-    st.error(
-        "Excel Zlecenia/Zamówienia musi mieć w nagłówku kolumny EAN i Ilość.\n"
-        f"Sprawdziłem wszystkie wiersze i nie znalazłem."
-    )
-    st.stop()
+    if header_row is None:
+        st.error(
+            "Excel Zlecenia/Zamówienia musi mieć w nagłówku kolumny EAN i Ilość.\n"
+            "Sprawdziłem wszystkie wiersze i nie znalazłem."
+        )
+        st.stop()
 
-# Wyciągnij nazwy kolumn
-col_ean_order = next(c for c in header if normalize_col_name(c) in syn_ean_ord)
-col_qty_order = next(c for c in header if normalize_col_name(c) in syn_qty_ord)
+    # znajdź indeksy kolumn
+    col_ean_idx = next(i for i, v in enumerate(header)
+                       if normalize_col_name(str(v)) in syn_ean)
+    col_qty_idx = next(i for i, v in enumerate(header)
+                       if normalize_col_name(str(v)) in syn_qty)
 
-# Parsuj dane poniżej nagłówka
-ord_rows = []
-for _, row in df_order_raw.iloc[header_row+1:].iterrows():
-    raw_ean = str(row[col_ean_order]).strip().rstrip(".0")
-    # oczyść ilość z białych znaków i zamień przecinek na kropkę
-    raw_qty_str = str(row[col_qty_order]).strip()
-    raw_qty_str = re.sub(r"\s+", "", raw_qty_str)  # usunięcie spacji, NBSP, tabów itp.
-    raw_qty_str = raw_qty_str.replace(",", ".")
-    # pomiń, jeśli nie ma w ogóle wartości ilości
-    if raw_qty_str == "" or raw_qty_str.lower() in ("nan",):
-        continue
-    try:
-        qty = float(raw_qty_str)
-    except:
-        # jeśli nie da się skonwertować, pomiń wiersz
-        continue
-    ord_rows.append([raw_ean, qty])
+    rows = []
+    for _, row in df_raw.iloc[header_row+1:].iterrows():
+        raw_ean = str(row.iloc[col_ean_idx]).strip().rstrip(".0")
+        raw_qty = str(row.iloc[col_qty_idx]).strip()
+        raw_qty = re.sub(r"\s+", "", raw_qty).replace(",", ".")
+        if not raw_qty or raw_qty.lower() == "nan":
+            continue
+        try:
+            qty = float(raw_qty)
+        except:
+            continue
+        rows.append([raw_ean, qty])
 
-# Zbuduj df_order tylko z wierszy, które przeszły filtr
-df_order = pd.DataFrame(ord_rows, columns=["Symbol", "Ilość"])
+    return pd.DataFrame(rows, columns=["Symbol","Ilość_Zam"])
+
+def parse_order_pdf(f):
+    rows = []
+    with pdfplumber.open(f) as pdf:
+        for page in pdf.pages:
+            text = page.extract_text() or ""
+            for line in text.split("\n"):
+                # ilość, jednostka, EAN
+                m = re.match(
+                    r"\s*\d+\s+.+?\s+([\d\s]+,\d+)\s+\S+\s+(\d{13})",
+                    line
+                )
+                if not m:
+                    continue
+                raw_qty, raw_ean = m.group(1), m.group(2)
+                num = raw_qty.replace(" ", "").replace(",", ".")
+                try:
+                    qty = float(num)
+                except:
+                    qty = 0.0
+                rows.append([raw_ean, qty])
+    return pd.DataFrame(rows, columns=["Symbol","Ilość_Zam"])
+
+# wybierz parser w zależności od typu pliku
+if uploaded_order.name.lower().endswith(".xlsx"):
+    df_order = parse_order_excel(uploaded_order)
+else:
+    df_order = parse_order_pdf(uploaded_order)
+
+# -------------------------
+# 3) Parsowanie WZ
+# -------------------------
+def parse_wz_excel(f):
+    df_raw = pd.read_excel(f, dtype=str)
+    syn_ean = { normalize_col_name(c): c for c in ["Kod produktu","EAN","symbol"] }
+    syn_qty = { normalize_col_name(c): c for c in ["Ilość","Ilosc","Quantity","Qty"] }
+
+    col_ean = next((c for c in df_raw.columns if normalize_col_name(c) in syn_ean), None)
+    col_qty = next((c for c in df_raw.columns if normalize_col_name(c) in syn_qty), None)
+    if not col_ean or not col_qty:
+        st.error(
+            "Excel WZ musi mieć kolumny EAN i Ilość.\n"
+            f"Znalezione: {list(df_raw.columns)}"
+        )
+        st.stop()
+
+    tmp = df_raw[col_ean].astype(str).str.strip().str.split().str[-1]
+    mask = tmp.str.fullmatch(r"\d{13}")
+    df = pd.DataFrame({
+        "Symbol": tmp[mask],
+        "Ilość_WZ": pd.to_numeric(
+            df_raw.loc[mask, col_qty]
+                  .astype(str)
+                  .str.replace(",",".")
+                  .str.replace(r"\s+","",regex=True),
+            errors="coerce"
+        ).fillna(0)
+    })
+    return df
+
+def parse_wz_pdf(f):
+    rows = []
+    with pdfplumber.open(f) as pdf:
+        for page in pdf.pages:
+            text = page.extract_text() or ""
+            for line in text.split("\n"):
+                # numer, EAN, ... , ilość, waga
+                m = re.match(
+                    r"\s*\d+\s+(\d{13})\s+.+?\s+([\d\s]+,\d{2})\s+[\d\s]+,\d{2}$",
+                    line
+                )
+                if not m:
+                    continue
+                raw_ean, raw_qty = m.group(1), m.group(2)
+                num = raw_qty.replace(" ", "").replace(",", ".")
+                try:
+                    qty = float(num)
+                except:
+                    qty = 0.0
+                rows.append([raw_ean, qty])
+    return pd.DataFrame(rows, columns=["Symbol","Ilość_WZ"])
+
+if uploaded_wz.name.lower().endswith(".xlsx"):
+    df_wz = parse_wz_excel(uploaded_wz)
+else:
+    df_wz = parse_wz_pdf(uploaded_wz)
+
+# -------------------------
+# 4) Grupowanie i sumowanie
+# -------------------------
+df_ord_g = (
+    df_order.groupby("Symbol", as_index=False)
+            .agg({"Ilość_Zam": "sum"})
+            .rename(columns={"Ilość_Zam": "Zamówiona_ilość"})
+)
+df_wz_g = (
+    df_wz.groupby("Symbol", as_index=False)
+         .agg({"Ilość_WZ": "sum"})
+         .rename(columns={"Ilość_WZ": "Wydana_ilość"})
+)
+
+# -------------------------
+# 5) Porównanie
+# -------------------------
+df_cmp = pd.merge(df_ord_g, df_wz_g, on="Symbol", how="outer", indicator=True)
+df_cmp["Zamówiona_ilość"].fillna(0, inplace=True)
+df_cmp["Wydana_ilość"].fillna(0, inplace=True)
+df_cmp["Różnica"] = df_cmp["Zamówiona_ilość"] - df_cmp["Wydana_ilość"]
+
+def status(r):
+    if r["_merge"] == "left_only":   return "Brak we WZ"
+    if r["_merge"] == "right_only":  return "Brak w zamówieniu"
+    return "OK" if r["Różnica"] == 0 else "Różni się"
+
+df_cmp["Status"] = df_cmp.apply(status, axis=1)
+order = ["Różni się","Brak we WZ","Brak w zamówieniu","OK"]
+df_cmp["Status"] = pd.Categorical(df_cmp["Status"], categories=order, ordered=True)
+df_cmp.sort_values(["Status","Symbol"], inplace=True)
+
+# -------------------------
+# 6) Wyświetlenie i eksport
+# -------------------------
+def highlight(row):
+    color = "#c6efce" if row["Status"] == "OK" else "#ffc7ce"
+    return [f"background-color: {color}" for _ in row.index]
+
+st.markdown("### 📊 Wynik porównania")
+styled = (
+    df_cmp.style
+          .format({"Zamówiona_ilość":"{:.0f}",
+                   "Wydana_ilość":"{:.0f}",
+                   "Różnica":"{:.0f}"})
+          .apply(highlight, axis=1)
+)
+st.dataframe(styled, use_container_width=True)
+
+def to_excel(df):
+    out = BytesIO()
+    writer = pd.ExcelWriter(out, engine="openpyxl")
+    df.to_excel(writer, index=False, sheet_name="Porównanie")
+    writer.close()
+    return out.getvalue()
+
+st.download_button(
+    "⬇️ Pobierz raport Excel",
+    data=to_excel(df_cmp),
+    file_name="porownanie_order_vs_wz.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+)
+
+all_ok = (df_cmp["Status"] == "OK").all()
+if all_ok:
+    st.markdown("<h4 style='color:green;'>✅ Pozycje się zgadzają</h4>", unsafe_allow_html=True)
+else:
+    st.markdown("<h4 style='color:red;'>❌ Pozycje się nie zgadzają</h4>", unsafe_allow_html=True)
