@@ -84,7 +84,9 @@ else:
     except Exception as e:
         st.error(f"Błąd wczytywania Excela Zlecenia/Zamówienia:\n```{e}```")
         st.stop()
-    syn_ean_ord = {normalize_col_name(c): c for c in ["Symbol","symbol","kod ean","ean","kod produktu"]}
+    syn_qty_ord = {normalize_col_name(c): c for c in [
+        "Ilość", "Ilosc", "Quantity", "Qty", "sztuki", "ilość sztuk", "ilość sztuk zamówiona", "zamówiona ilość", "quantity ordered", "qty ordered"
+    ]}
     syn_qty_ord = {normalize_col_name(c): c for c in ["Ilość","Ilosc","Quantity","Qty","sztuki"]}
     header_idx = None
     for idx, row in df_temp.iterrows():
