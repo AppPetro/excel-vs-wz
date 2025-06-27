@@ -33,12 +33,10 @@ def parse_excel(f, syn_ean_list, syn_qty_list, col_qty_name):
     df = pd.read_excel(f, dtype=str, header=None)
     syn_ean = {normalize_col_name(x): x for x in syn_ean_list}
     syn_qty = {normalize_col_name(x): x for x in syn_qty_list}
-
     h_row, e_i, q_i = find_header_and_idxs(df, syn_ean, syn_qty)
     if h_row is None:
         st.error(f"Excel musi mieć nagłówek EAN {syn_ean_list} i Ilość {syn_qty_list}.")
         st.stop()
-
     out = []
     for _, r in df.iloc[h_row+1:].iterrows():
         ean = clean_ean(r.iloc[e_i])
@@ -62,7 +60,7 @@ def parse_pdf(f, col_qty_name):
                     rows.append([ean, qty])
     return pd.DataFrame(rows, columns=["Symbol", col_qty_name])
 
-# ── Konfiguracja UI ────────────────────────────────────────────
+# ── UI ──────────────────────────────────────────────────────────
 st.set_page_config(page_title="📋 Porównywarka Zlecenie↔WZ", layout="wide")
 st.title("📋 Porównywarka Zlecenie/Zamówienie vs. WZ")
 
@@ -75,17 +73,17 @@ if not up1 or not up2:
     st.info("Proszę wgrać oba pliki.")
     st.stop()
 
-# ── Wspólne synonimy ────────────────────────────────────────────
+# ── Synonimy kolumn ─────────────────────────────────────────────
 EAN_SYNS = ["Symbol","symbol","kod ean","ean","kod produktu","gtin"]
 QTY_SYNS = ["Ilość","Ilosc","Quantity","Qty","sztuki","ilość sztuk zamówiona","zamówiona ilość"]
 
-# ── Parsujemy Zlecenie/Zamówienie ───────────────────────────────
+# ── Parsowanie pierwszego pliku ─────────────────────────────────
 if up1.name.lower().endswith(".xlsx"):
     df1 = parse_excel(up1, EAN_SYNS, QTY_SYNS, "Ilość_Zam")
 else:
     df1 = parse_pdf(up1, "Ilość_Zam")
 
-# ── Parsujemy WZ ────────────────────────────────────────────────
+# ── Parsowanie drugiego pliku ──────────────────────────────────
 if up2.name.lower().endswith(".xlsx"):
     df2 = parse_excel(up2, EAN_SYNS, QTY_SYNS, "Ilość_WZ")
 else:
@@ -109,10 +107,10 @@ order = ["Różni się","Brak we WZ","Brak w zamówieniu","OK"]
 cmp["Status"] = pd.Categorical(cmp["Status"], categories=order, ordered=True)
 cmp.sort_values(["Status","Symbol"], inplace=True)
 
-# ── Wyświetlenie tabeli i eksport ─────────────────────────────
+# ── Wyświetlenie i eksport ─────────────────────────────────────
 def hl(r):
     color = "#c6efce" if r.Status=="OK" else "#ffc7ce"
-    return [f"background-color:{color}"]*len(r)
+    return [f"background-color:{color}"] * len(r)
 
 st.markdown("### 📊 Wynik porównania")
 st.dataframe(
@@ -128,14 +126,15 @@ with pd.ExcelWriter(buf, engine="openpyxl") as writer:
 
 st.download_button("⬇️ Pobierz raport", data=buf.getvalue(), file_name="raport.xlsx")
 
-if (cmp.Status=="OK").all():
+if (cmp.Status == "OK").all():
     st.markdown("<h4 style='color:green;'>✅ Pozycje się zgadzają</h4>", unsafe_allow_html=True)
 else:
     st.markdown("<h4 style='color:red;'>❌ Pozycje się nie zgadzają</h4>", unsafe_allow_html=True)
 
 # ── Instrukcja obsługi (schowana w expanderze) ─────────────────
 with st.expander("🛈 Instrukcja obsługi", expanded=False):
-    st.markdown("""
+    st.markdown(
+        """
 **Jak to działa?**  
 - Wgrywasz dwa pliki: Zlecenie/Zamówienie (pierwszy uploader) i WZ (drugi uploader).  
 - Oba mogą być w formacie Excel lub PDF, niezależnie od siebie.
