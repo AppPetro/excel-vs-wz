@@ -25,32 +25,22 @@ def clean_qty(raw: str) -> float:
         return 0.0
 
 def find_header_and_idxs(df_raw: pd.DataFrame, syn_ean: dict, syn_qty: dict):
-    """Zwraca (header_row_index, ean_col_idx, qty_col_idx) lub (None,_,_) jeśli nie znaleziono."""
+    """Zwraca (header_row_index, ean_col_idx, qty_col_idx) lub (None, None, None)."""
     for idx, row in df_raw.iterrows():
         norm = [normalize_col_name(v) for v in row.values.astype(str)]
         if any(h in syn_ean for h in norm) and any(h in syn_qty for h in norm):
-            # udało się znaleźć wiersz z headerem
-            ean_idx = next(i for i,v in enumerate(norm) if v in syn_ean)
-            qty_idx = next(i for i,v in enumerate(norm) if v in syn_qty)
+            ean_idx = next(i for i, v in enumerate(norm) if v in syn_ean)
+            qty_idx = next(i for i, v in enumerate(norm) if v in syn_qty)
             return idx, ean_idx, qty_idx
     return None, None, None
 
 # ----------------------------------------------------------------
 # parsowanie Excela (wspólne dla obu uploaderów)
 # ----------------------------------------------------------------
-def parse_excel_generic(f, 
-                        syn_ean_list, syn_qty_list, 
-                        col_name_qty, col_name_ean="Symbol"):
-    """
-    f            : plik .xlsx
-    syn_ean_list : lista nazw kolumn EAN
-    syn_qty_list : lista nazw kolumn Ilość
-    col_name_qty : nazwa kolumny wyniku dla qty
-    col_name_ean : nazwa kolumny wyniku dla ean (domyślnie "Symbol")
-    """
+def parse_excel_generic(f, syn_ean_list, syn_qty_list, col_name_qty, col_name_ean="Symbol"):
     df_raw = pd.read_excel(f, dtype=str, header=None)
-    syn_ean = { normalize_col_name(c): c for c in syn_ean_list }
-    syn_qty = { normalize_col_name(c): c for c in syn_qty_list }
+    syn_ean = {normalize_col_name(c): c for c in syn_ean_list}
+    syn_qty = {normalize_col_name(c): c for c in syn_qty_list}
 
     header_row, ean_idx, qty_idx = find_header_and_idxs(df_raw, syn_ean, syn_qty)
     if header_row is None:
@@ -61,7 +51,7 @@ def parse_excel_generic(f,
         st.stop()
 
     rows = []
-    for _, row in df_raw.iloc[header_row+1:].iterrows():
+    for _, row in df_raw.iloc[header_row + 1 :].iterrows():
         ean = clean_ean(row.iloc[ean_idx])
         qty = clean_qty(row.iloc[qty_idx])
         if qty <= 0:
@@ -74,12 +64,6 @@ def parse_excel_generic(f,
 # parsowanie PDF (wspólne dla obu uploaderów)
 # ----------------------------------------------------------------
 def parse_pdf_generic(f, pattern, col_name_qty, col_name_ean="Symbol"):
-    """
-    f             : plik .pdf
-    pattern       : regex z dwiema grupami: (EAN, QTY)
-    col_name_qty  : nazwa kolumny wyniku dla qty
-    col_name_ean  : nazwa kolumny wyniku dla ean
-    """
     rows = []
     with pdfplumber.open(f) as pdf:
         for page in pdf.pages:
@@ -120,18 +104,21 @@ if not uploaded_order or not uploaded_wz:
     st.info("Proszę wgrać oba pliki.")
     st.stop()
 
-# -------------------------
-# 1) Parse Zlecenie/Zamówienie
-# -------------------------
+# ------------------------------------
+# 1) Parsowanie Zlecenia/Zamówienia
+# ------------------------------------
+syn_ean_all = ["Symbol","symbol","kod ean","ean","kod produktu","GTIN"]
+syn_qty_all = ["Ilość","Ilosc","Quantity","Qty","sztuki","ilość sztuk zamówiona","zamówiona ilość"]
+
 if uploaded_order.name.lower().endswith(".xlsx"):
     df_order = parse_excel_generic(
         uploaded_order,
-        syn_ean_list=["Symbol","symbol","kod ean","ean","kod produktu","gtin"],
-        syn_qty_list=["Ilość","Ilosc","Quantity","Qty","sztuki","ilość sztuk zamówiona","zamówiona ilość"],
+        syn_ean_list=syn_ean_all,
+        syn_qty_list=syn_qty_all,
         col_name_qty="Ilość_Zam"
     )
 else:
-    # regex: numer, EAN, ... , ilość (z separatorami), jednostka, waga
+    # regex: numer, EAN, ... , ilość, jednostka, waga
     pattern_order = r"\s*\d+\s+(\d{13})\s+.+?\s+([\d\s]+,\d{2})\s+\S+\s+[\d\s]+,\d{2}$"
     df_order = parse_pdf_generic(
         uploaded_order,
@@ -140,13 +127,13 @@ else:
     )
 
 # -------------------------
-# 2) Parse WZ
+# 2) Parsowanie WZ
 # -------------------------
 if uploaded_wz.name.lower().endswith(".xlsx"):
     df_wz = parse_excel_generic(
         uploaded_wz,
-        syn_ean_list=["Kod produktu","EAN","symbol"],
-        syn_qty_list=["Ilość","Ilosc","Quantity","Qty"],
+        syn_ean_list=syn_ean_all,     # TE SAME synonimy co wyżej
+        syn_qty_list=syn_qty_all,
         col_name_qty="Ilość_WZ"
     )
 else:
