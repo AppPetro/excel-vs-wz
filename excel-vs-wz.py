@@ -90,9 +90,11 @@ with st.expander("ℹ️ Instrukcja obsługi", expanded=True):
 
 1. W pierwszym polu **wgrywasz**:
    - **Zlecenie transportowe** (PDF)  
-   - lub **Zlecenie wydania** (PDF lub Excel)
+   - lub **Zlecenie wydania** (PDF)
+   - lub **Excel**)
 2. W drugim polu **wgrywasz**:
-   - **WZ** (PDF lub Excel)
+   - **WZ** (PDF)
+   - lub **Excel**
 
 **Excel (.xlsx)**  
 - Nagłówek może być w dowolnym wierszu, ale kolumny muszą mieć dokładnie nazwy (po normalizacji):  
