@@ -2,13 +2,13 @@
 **Wynik:**  
 - Tabela: **Symbol**, **Zamówiona_ilość**, **Wydana_ilość**, **Różnica**, **Status**.  
 - Zielone wiersze = OK; czerwone = rozbieżności/braki.  
-- Kliknij "⬇️ Pobierz raport", by pobrać gotowy plik Excel.  
-""")
+- Kliknij "⬇️ Pobierz raport", by pobrać gotowy plik Excel.
+  ''')
 
 st.sidebar.header("Krok 1: Zlecenie/Zamówienie")
-up1 = st.sidebar.file_uploader("Wybierz Zlecenie/Zamówienie", type=["xlsx","pdf"], key="file1")
+up1 = st.sidebar.file_uploader("Wybierz plik", type=["xlsx","pdf"], key="file1")
 st.sidebar.header("Krok 2: WZ")
-up2 = st.sidebar.file_uploader("Wybierz WZ", type=["xlsx","pdf"], key="file2")
+up2 = st.sidebar.file_uploader("Wybierz plik", type=["xlsx","pdf"], key="file2")
 
 if not up1 or not up2:
   st.info("Proszę wgrać oba pliki.")
