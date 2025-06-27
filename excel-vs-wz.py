@@ -30,7 +30,7 @@ def find_header_and_idxs(df: pd.DataFrame, syn_ean_list: list, syn_qty_list: lis
             return i, e_i, q_i
     return None, None, None
 
-# ── Parsowanie Excela (uniwersalne) ─────────────────────────────
+# ── Parsowanie Excela ───────────────────────────────────────────
 def parse_excel(f, syn_ean_list, syn_qty_list, col_qty_name):
     df = pd.read_excel(f, dtype=str, header=None)
     h_row, e_i, q_i = find_header_and_idxs(df, syn_ean_list, syn_qty_list)
@@ -67,38 +67,56 @@ def parse_wz_pdf(f):
     with pdfplumber.open(f) as pdf:
         for page in pdf.pages:
             for line in (page.extract_text() or "").splitlines():
+                # znajdź 13-cyfrowy EAN
                 ean_m = re.search(r"\b(\d{13})\b", line)
                 if not ean_m:
                     continue
-                qty_matches = re.findall(r"[\d\s]+,\d{2}", line)
-                if not qty_matches:
+                # znajdź wszystkie ilości (liczby ze spacjami i przecinkiem)
+                matches = list(re.finditer(r"[\d\s]+,\d{2}", line))
+                # wybieramy pierwsze dopasowanie, które występuje po EAN
+                qty = None
+                for m in matches:
+                    if m.start() > ean_m.end():
+                        qty = clean_qty(m.group())
+                        break
+                if qty is None or qty <= 0:
                     continue
                 ean = clean_ean(ean_m.group(1))
-                qty = clean_qty(qty_matches[-1])
-                if qty > 0:
-                    rows.append([ean, qty])
+                rows.append([ean, qty])
     return pd.DataFrame(rows, columns=["Symbol", "Ilość_WZ"])
 
 # ── Streamlit UI ────────────────────────────────────────────────
 st.set_page_config(page_title="📋 Porównywarka Zlecenie↔WZ", layout="wide")
 st.title("📋 Porównywarka Zlecenie/Zamówienie vs. WZ")
 
-# Instrukcja od razu dostępna
+# Instrukcja obsługi dostępna od razu
 with st.expander("ℹ️ Instrukcja obsługi", expanded=True):
     st.markdown("""
 **Jak to działa?**
 
 1. W pierwszym polu **wgrywasz**:
    - Zlecenie transportowe (PDF)  
-   - lub Zlecenie wydania (PDF/Excel)
+   - lub Zlecenie wydania (PDF/Excel)  
 2. W drugim polu **wgrywasz**:
    - WZ (PDF/Excel)
 
-Excel: nagłówek gdziekolwiek, kolumny EAN i Ilość wg synonimów.  
-PDF – zamówienie: ilość → jm. → EAN.  
-PDF – WZ: EAN + ostatni fragment `123 456,78`.  
+**Excel (.xlsx):**  
+- Nagłówek może być w dowolnym wierszu.  
+- Kolumny muszą nazywać się dokładnie:
+  - **EAN**: Symbol, symbol, Kod EAN, kod ean, Kod produktu, GTIN  
+  - **Ilość**: Ilość, Ilosc, Quantity, Qty, sztuki, ilość sztuk zamówiona, zamówiona ilość  
+- Usuwa sufiks `.0` z EAN i konwertuje `1 638,00` → `1638.00`.
 
-Wynik: Symbol, Zamówiona_ilość, Wydana_ilość, Różnica, Status.
+**PDF – Zlecenie/Zamówienie:**  
+- Parsowane wg wzorca: ilość → jednostka → EAN.
+
+**PDF – WZ:**  
+- Znajduje 13-cyfrowy EAN, a następnie **pierwszą** liczbę ze spacjami i przecinkiem, która występuje **po** EAN (unika wagi).
+
+**Wynik:**  
+- Tabela: **Symbol**, **Zamówiona_ilość**, **Wydana_ilość**, **Różnica**, **Status**.  
+- Zielone wiersze = OK; czerwone = rozbieżności/braki.  
+- Kliknij „⬇️ Pobierz raport”, żeby pobrać Excel.
 """)
 
 st.sidebar.header("Krok 1: Zlecenie/Zamówienie")
@@ -110,24 +128,25 @@ if not up1 or not up2:
     st.info("Proszę wgrać oba pliki.")
     st.stop()
 
+# Synonimy dla Excela
 EAN_SYNS = ["Symbol","symbol","kod ean","ean","kod produktu","gtin"]
 QTY_SYNS = ["Ilość","Ilosc","Quantity","Qty","sztuki","ilość sztuk zamówiona","zamówiona ilość"]
 
-# Parsowanie
+# Parsowanie plików
 if up1.name.lower().endswith(".xlsx"):
     df1 = parse_excel(up1, EAN_SYNS, QTY_SYNS, "Ilość_Zam")
 else:
     df1 = parse_order_pdf(up1)
+
 if up2.name.lower().endswith(".xlsx"):
     df2 = parse_excel(up2, EAN_SYNS, QTY_SYNS, "Ilość_WZ")
 else:
     df2 = parse_wz_pdf(up2)
 
-# Porównanie
+# Grupowanie i porównanie
 g1 = df1.groupby("Symbol", as_index=False).sum().rename(columns={"Ilość_Zam":"Zamówiona_ilość"})
 g2 = df2.groupby("Symbol", as_index=False).sum().rename(columns={"Ilość_WZ":"Wydana_ilość"})
 cmp = pd.merge(g1, g2, on="Symbol", how="outer", indicator=True)
-# zamiast .fillna(…, inplace=True) używamy przypisania :contentReference[oaicite:0]{index=0}
 cmp["Zamówiona_ilość"] = cmp["Zamówiona_ilość"].fillna(0)
 cmp["Wydana_ilość"]    = cmp["Wydana_ilość"].fillna(0)
 cmp["Różnica"] = cmp["Zamówiona_ilość"] - cmp["Wydana_ilość"]
@@ -143,7 +162,7 @@ cmp["Status"] = pd.Categorical(cmp["Status"], categories=order, ordered=True)
 cmp.sort_values(["Status","Symbol"], inplace=True)
 
 def highlight_row(row):
-    color = "#c6efce" if row["Status"]=="OK" else "#ffc7ce"
+    color = "#c6efce" if row["Status"] == "OK" else "#ffc7ce"
     return [f"background-color: {color}"] * len(row)
 
 st.markdown("### 📊 Wynik porównania")
