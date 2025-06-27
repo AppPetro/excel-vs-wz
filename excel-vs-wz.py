@@ -28,40 +28,56 @@ def find_header_and_idxs(df: pd.DataFrame, syn_ean: dict, syn_qty: dict):
             return i, e_i, q_i
     return None, None, None
 
-# ── Parsowanie Excela ───────────────────────────────────────────
+# ── Parsowanie Excela (uniwersalne) ─────────────────────────────
 def parse_excel(f, syn_ean_list, syn_qty_list, col_qty_name):
     df = pd.read_excel(f, dtype=str, header=None)
     syn_ean = {normalize_col_name(x): x for x in syn_ean_list}
     syn_qty = {normalize_col_name(x): x for x in syn_qty_list}
     h_row, e_i, q_i = find_header_and_idxs(df, syn_ean, syn_qty)
     if h_row is None:
-        st.error(f"Excel musi mieć nagłówek EAN {syn_ean_list} i Ilość {syn_qty_list}.")
+        st.error(f"Excel musi mieć w nagłówku kolumny EAN {syn_ean_list} i Ilość {syn_qty_list}.")
         st.stop()
-    out = []
+    rows = []
     for _, r in df.iloc[h_row+1:].iterrows():
         ean = clean_ean(r.iloc[e_i])
         qty = clean_qty(r.iloc[q_i])
         if qty > 0:
-            out.append([ean, qty])
-    return pd.DataFrame(out, columns=["Symbol", col_qty_name])
+            rows.append([ean, qty])
+    return pd.DataFrame(rows, columns=["Symbol", col_qty_name])
 
-# ── Parsowanie PDF ──────────────────────────────────────────────
-PDF_PATTERN = r"\s*\d+\s+(\d{13})\s+.+?\s+([\d\s]+,\d{2})\s+[\d\s]+,\d{2}$"
-def parse_pdf(f, col_qty_name):
+# ── Parsowanie PDF dla Zlecenia/Zamówienia ───────────────────────
+ORDER_PDF_PATTERN = r"\s*\d+\s+.+?\s+([\d\s]+,\d+)\s+\S+\s+(\d{13})"
+def parse_order_pdf(f):
     rows = []
     with pdfplumber.open(f) as pdf:
         for page in pdf.pages:
             for line in (page.extract_text() or "").splitlines():
-                m = re.match(PDF_PATTERN, line)
+                m = re.match(ORDER_PDF_PATTERN, line)
+                if not m:
+                    continue
+                qty = clean_qty(m.group(1))
+                ean = clean_ean(m.group(2))
+                if qty > 0:
+                    rows.append([ean, qty])
+    return pd.DataFrame(rows, columns=["Symbol", "Ilość_Zam"])
+
+# ── Parsowanie PDF dla WZ ───────────────────────────────────────
+WZ_PDF_PATTERN = r"\s*\d+\s+(\d{13})\s+.+?\s+([\d\s]+,\d{2})\s+[\d\s]+,\d{2}$"
+def parse_wz_pdf(f):
+    rows = []
+    with pdfplumber.open(f) as pdf:
+        for page in pdf.pages:
+            for line in (page.extract_text() or "").splitlines():
+                m = re.match(WZ_PDF_PATTERN, line)
                 if not m:
                     continue
                 ean = clean_ean(m.group(1))
                 qty = clean_qty(m.group(2))
                 if qty > 0:
                     rows.append([ean, qty])
-    return pd.DataFrame(rows, columns=["Symbol", col_qty_name])
+    return pd.DataFrame(rows, columns=["Symbol", "Ilość_WZ"])
 
-# ── UI ──────────────────────────────────────────────────────────
+# ── Streamlit UI ────────────────────────────────────────────────
 st.set_page_config(page_title="📋 Porównywarka Zlecenie↔WZ", layout="wide")
 st.title("📋 Porównywarka Zlecenie/Zamówienie vs. WZ")
 
@@ -73,48 +89,43 @@ with st.expander("ℹ️ Instrukcja obsługi", expanded=True):
 1. Wgraj plik Zlecenia/Zamówienia (Excel lub PDF).
 2. Wgraj plik WZ (Excel lub PDF).
 
-**Dla Excela (.xlsx):**
-- Aplikacja sama wyszukuje wiersz nagłówka w dowolnej linii.
-- Rozpoznaje kolumnę **EAN** i kolumnę **Ilość** wg synonimów:
-  - EAN: Symbol, symbol, Kod EAN, kod ean, Kod produktu, GTIN
-  - Ilość: Ilość, Ilosc, Quantity, Qty, sztuki, ilość sztuk zamówiona, zamówiona ilość
-- Usuwa z EAN sufiks `.0` (np. `4250231542008.0` → `4250231542008`).
-- Ilości `1 638,00` lub `1638,00` są poprawnie konwertowane (usuwa spacje, zamienia przecinek).
+**Excel (.xlsx):**
+- Aplikacja sama znajdzie wiersz nagłówka.
+- Rozpozna kolumny **EAN** i **Ilość** (szeroki zestaw synonimów).
+- Usunie z EAN sufiks `.0`.
+- Ilości w formacie `1 638,00` → `1638.00`.
 
-**Dla PDF:**
-- Aplikacja skanuje każdą linię i wychwytuje:
-  `[nr]  [EAN]  …  [ilość z separatorem tysięcy i przecinkiem]  [waga]`
+**PDF:**
+- Zlecenie/Zamówienie: najpierw ilość, potem jednostka, potem EAN.
+- WZ: najpierw EAN, potem dowolne, potem ilość.
 
-**Wynik:**
-- Tabela z kolumnami: **Symbol**, **Zamówiona_ilość**, **Wydana_ilość**, **Różnica**, **Status**.
-- Zielone wiersze = OK; czerwone = rozbieżności/braki.
-- Kliknij "⬇️ Pobierz raport", by pobrać gotowy plik Excel.
-    """)
+Wynik to tabela z kolumnami: **Symbol**, **Zamówiona_ilość**, **Wydana_ilość**, **Różnica**, **Status**. Zielone = OK, czerwone = rozbieżności/braki.
+""")
 
 st.sidebar.header("Krok 1: Zlecenie/Zamówienie")
-up1 = st.sidebar.file_uploader("Wybierz plik", type=["xlsx","pdf"], key="file1")
+up1 = st.sidebar.file_uploader("Wybierz plik", type=["xlsx","pdf"], key="order")
 st.sidebar.header("Krok 2: WZ")
-up2 = st.sidebar.file_uploader("Wybierz plik", type=["xlsx","pdf"], key="file2")
+up2 = st.sidebar.file_uploader("Wybierz plik", type=["xlsx","pdf"], key="wz")
 
 if not up1 or not up2:
     st.info("Proszę wgrać oba pliki.")
     st.stop()
 
-# ── Synonimy kolumn ─────────────────────────────────────────────
+# ── Definicje synonimów ─────────────────────────────────────────
 EAN_SYNS = ["Symbol","symbol","kod ean","ean","kod produktu","gtin"]
 QTY_SYNS = ["Ilość","Ilosc","Quantity","Qty","sztuki","ilość sztuk zamówiona","zamówiona ilość"]
 
-# ── Parsowanie pierwszego pliku ─────────────────────────────────
+# ── Parsowanie Zlecenia/Zamówienia ──────────────────────────────
 if up1.name.lower().endswith(".xlsx"):
     df1 = parse_excel(up1, EAN_SYNS, QTY_SYNS, "Ilość_Zam")
 else:
-    df1 = parse_pdf(up1, "Ilość_Zam")
+    df1 = parse_order_pdf(up1)
 
-# ── Parsowanie drugiego pliku ──────────────────────────────────
+# ── Parsowanie WZ ───────────────────────────────────────────────
 if up2.name.lower().endswith(".xlsx"):
     df2 = parse_excel(up2, EAN_SYNS, QTY_SYNS, "Ilość_WZ")
 else:
-    df2 = parse_pdf(up2, "Ilość_WZ")
+    df2 = parse_wz_pdf(up2)
 
 # ── Grupowanie i porównanie ────────────────────────────────────
 g1 = df1.groupby("Symbol", as_index=False).sum().rename(columns={"Ilość_Zam":"Zamówiona_ilość"})
@@ -125,10 +136,8 @@ cmp["Wydana_ilość"]    = cmp["Wydana_ilość"].fillna(0)
 cmp["Różnica"]         = cmp["Zamówiona_ilość"] - cmp["Wydana_ilość"]
 
 def status(r):
-    if r["_merge"] == "left_only":
-        return "Brak we WZ"
-    if r["_merge"] == "right_only":
-        return "Brak w zamówieniu"
+    if r["_merge"] == "left_only":   return "Brak we WZ"
+    if r["_merge"] == "right_only":  return "Brak w zamówieniu"
     return "OK" if r["Różnica"] == 0 else "Różni się"
 
 cmp["Status"] = cmp.apply(status, axis=1)
