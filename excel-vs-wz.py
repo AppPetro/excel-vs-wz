@@ -5,16 +5,26 @@ import re
 from io import BytesIO
 
 # ----------------------------------------------------------------
-# funkcja pomocnicza do normalizacji nazw kolumn
+# funkcje pomocnicze do czyszczenia EAN i ilości
 # ----------------------------------------------------------------
+def clean_ean(raw: str) -> str:
+    s = str(raw).strip()
+    # obetnij dokładnie sufix ".0" jeśli istnieje
+    if s.endswith(".0"):
+        return s[:-2]
+    return s
+
+def clean_qty(raw: str) -> float:
+    s = str(raw).strip()
+    # usuń wszystkie białe znaki (spacje, NBSP, taby) i zamień przecinek na kropkę
+    s = re.sub(r"\s+", "", s).replace(",", ".")
+    try:
+        return float(s)
+    except:
+        return 0.0
+
 def normalize_col_name(name: str) -> str:
-    return (
-        name
-        .lower()
-        .replace(" ", "")
-        .replace("\xa0", "")
-        .replace("_", "")
-    )
+    return name.lower().replace(" ", "").replace("\xa0", "").replace("_", "")
 
 # ----------------------------------------------------------------
 # konfiguracja Streamlita
@@ -66,7 +76,7 @@ def parse_order_excel(f):
     # znajdź wiersz z nagłówkiem
     header_row = None
     for idx, row in df_raw.iterrows():
-        norm = [ normalize_col_name(str(v)) for v in row.values ]
+        norm = [ normalize_col_name(v) for v in row.values.astype(str) ]
         if any(h in syn_ean for h in norm) and any(h in syn_qty for h in norm):
             header = row.values.tolist()
             header_row = idx
@@ -80,26 +90,18 @@ def parse_order_excel(f):
         st.stop()
 
     # znajdź indeksy kolumn
-    col_ean_idx = next(i for i, v in enumerate(header)
+    col_ean_idx = next(i for i,v in enumerate(header)
                        if normalize_col_name(str(v)) in syn_ean)
-    col_qty_idx = next(i for i, v in enumerate(header)
+    col_qty_idx = next(i for i,v in enumerate(header)
                        if normalize_col_name(str(v)) in syn_qty)
 
     rows = []
     for _, row in df_raw.iloc[header_row+1:].iterrows():
-        raw_ean = str(row.iloc[col_ean_idx]).strip()
-        # obetnij dokładnie sufix ".0", jeśli istnieje
-        if raw_ean.endswith(".0"):
-            raw_ean = raw_ean[:-2]
-        raw_qty = str(row.iloc[col_qty_idx]).strip()
-        raw_qty = re.sub(r"\s+", "", raw_qty).replace(",", ".")
-        if not raw_qty or raw_qty.lower() == "nan":
+        raw_ean = clean_ean(row.iloc[col_ean_idx])
+        raw_qty = clean_qty(row.iloc[col_qty_idx])
+        if raw_qty <= 0:
             continue
-        try:
-            qty = float(raw_qty)
-        except:
-            continue
-        rows.append([raw_ean, qty])
+        rows.append([raw_ean, raw_qty])
 
     return pd.DataFrame(rows, columns=["Symbol","Ilość_Zam"])
 
@@ -116,13 +118,11 @@ def parse_order_pdf(f):
                 )
                 if not m:
                     continue
-                raw_qty, raw_ean = m.group(1), m.group(2)
-                num = raw_qty.replace(" ", "").replace(",", ".")
-                try:
-                    qty = float(num)
-                except:
-                    qty = 0.0
-                rows.append([raw_ean, qty])
+                qty = clean_qty(m.group(1))
+                ean = clean_ean(m.group(2))
+                if qty <= 0:
+                    continue
+                rows.append([ean, qty])
     return pd.DataFrame(rows, columns=["Symbol","Ilość_Zam"])
 
 if uploaded_order.name.lower().endswith(".xlsx"):
@@ -150,23 +150,17 @@ def parse_wz_excel(f):
     tmp = (
         df_raw[col_ean]
           .astype(str)
-          .str.strip()
           .str.replace(r"\.0$", "", regex=True)  # usuń sufix ".0"
+          .str.strip()
           .str.split()
           .str[-1]
     )
-    mask = tmp.str.fullmatch(r"\d{13}")
-    df = pd.DataFrame({
-        "Symbol": tmp[mask],
-        "Ilość_WZ": pd.to_numeric(
-            df_raw.loc[mask, col_qty]
-                  .astype(str)
-                  .str.replace(",",".")
-                  .str.replace(r"\s+","",regex=True),
-            errors="coerce"
-        ).fillna(0)
-    })
-    return df
+    rows = []
+    for raw_ean, raw_qty_raw in zip(tmp, df_raw[col_qty]):
+        ean = clean_ean(raw_ean)
+        qty = clean_qty(raw_qty_raw)
+        rows.append([ean, qty])
+    return pd.DataFrame(rows, columns=["Symbol","Ilość_WZ"])
 
 def parse_wz_pdf(f):
     rows = []
@@ -180,13 +174,9 @@ def parse_wz_pdf(f):
                 )
                 if not m:
                     continue
-                raw_ean, raw_qty = m.group(1), m.group(2)
-                num = raw_qty.replace(" ", "").replace(",", ".")
-                try:
-                    qty = float(num)
-                except:
-                    qty = 0.0
-                rows.append([raw_ean, qty])
+                ean = clean_ean(m.group(1))
+                qty = clean_qty(m.group(2))
+                rows.append([ean, qty])
     return pd.DataFrame(rows, columns=["Symbol","Ilość_WZ"])
 
 if uploaded_wz.name.lower().endswith(".xlsx"):
