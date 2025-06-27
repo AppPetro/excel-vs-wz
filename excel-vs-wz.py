@@ -157,3 +157,11 @@ with st.expander("🛈 Instrukcja obsługi", expanded=False):
 
 **Dla PDF:**  
 - Aplikacja skanuje każdą linijkę tekstu i szuka wzorca:
+# ── Instrukcja obsługi (schowana w expanderze) ─────────────────
+with st.expander("🛈 Instrukcja obsługi", expanded=False):
+    st.markdown(
+        """
+        **Jak to działa?**
+        …
+        """
+    )
