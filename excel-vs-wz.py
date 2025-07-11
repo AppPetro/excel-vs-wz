@@ -13,6 +13,7 @@ def clean_ean(raw: str) -> str:
     return s[:-2] if s.endswith(".0") else s
 
 def clean_qty(raw: str) -> float:
+    # usuwamy spacje (w tym NBSP), zamieniamy przecinek na kropkę i konwertujemy
     s = re.sub(r"\s+", "", str(raw)).replace(",", ".")
     try:
         return float(s)
@@ -20,6 +21,10 @@ def clean_qty(raw: str) -> float:
         return 0.0
 
 def find_header_and_idxs(df: pd.DataFrame, syn_ean_list: list, syn_qty_list: list):
+    """
+    Szuka wiersza nagłówka w dowolnym wierszu Excela.
+    Zwraca (wiersz, idx_ean, idx_qty) lub (None, None, None).
+    """
     syn_ean_keys = {normalize_col_name(x) for x in syn_ean_list}
     syn_qty_keys = {normalize_col_name(x) for x in syn_qty_list}
     for i, row in df.iterrows():
@@ -35,7 +40,7 @@ def parse_excel(f, syn_ean_list, syn_qty_list, col_qty_name):
     df = pd.read_excel(f, dtype=str, header=None)
     h_row, e_i, q_i = find_header_and_idxs(df, syn_ean_list, syn_qty_list)
     if h_row is None:
-        st.error(f"Excel musi mieć w nagłówku kolumny EAN ({syn_ean_list}) i Ilość ({syn_qty_list}).")
+        st.error(f"Excel musi mieć w nagłówku kolumny EAN {syn_ean_list} i Ilość {syn_qty_list}.")
         st.stop()
     rows = []
     for _, r in df.iloc[h_row+1:].iterrows():
@@ -63,32 +68,21 @@ def parse_order_pdf(f):
 
 # ── Parsowanie PDF: WZ ───────────────────────────────────────────
 def parse_wz_pdf(f):
+    """
+    Wyciąga z każdej linii 13-cyfrowy EAN i odpowiadającą mu ilość
+    w pełnym formacie (np. '1 578,00') bez pomyłek z datami.
+    """
+    wz_pattern = re.compile(r"\b(\d{13})\b.*?((?:\d{1,3}\s?)*\d+,\d{2})")
     rows = []
-    # regex na ilość (z przecinkiem) i na formaty dat, aby je pomijać:
-    qty_pattern = re.compile(r"^\d[\d\s]*,\d+$")
-    date_pattern1 = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-    date_pattern2 = re.compile(r"^\d{2}[.-]\d{2}[.-]\d{4}$")
     with pdfplumber.open(f) as pdf:
         for page in pdf.pages:
             for line in (page.extract_text() or "").splitlines():
-                # znajdź EAN
-                ean_m = re.search(r"\b(\d{13})\b", line)
-                if not ean_m:
+                m = wz_pattern.search(line)
+                if not m:
                     continue
-                ean = clean_ean(ean_m.group(1))
-                # podziel linię na tokeny
-                tokens = re.split(r"\s+", line)
-                # znajdź indeks tokenu zawierającego EAN
-                ean_idx = next((i for i,t in enumerate(tokens) if ean_m.group(1) in t), None)
-                if ean_idx is None:
-                    continue
-                # szukaj pierwszego tokenu będącego ilością _po_ EAN, pomijając daty
-                qty = None
-                for tok in tokens[ean_idx+1:]:
-                    if qty_pattern.match(tok) and not date_pattern1.match(tok) and not date_pattern2.match(tok):
-                        qty = clean_qty(tok)
-                        break
-                if qty and qty > 0:
+                ean = clean_ean(m.group(1))
+                qty = clean_qty(m.group(2))
+                if qty > 0:
                     rows.append([ean, qty])
     return pd.DataFrame(rows, columns=["Symbol", "Ilość_WZ"])
 
@@ -96,33 +90,34 @@ def parse_wz_pdf(f):
 st.set_page_config(page_title="📋 Porównywarka Zlecenie↔WZ", layout="wide")
 st.title("📋 Porównywarka Zlecenie/Zamówienie vs. WZ")
 
+# Instrukcja obsługi dostępna od razu
 with st.expander("ℹ️ Instrukcja obsługi", expanded=True):
     st.markdown("""
-**Jak to działa?**
+**1. W pierwszym polu wgrywasz**  
+- Zlecenie transportowe (PDF)  
+- lub Zlecenie wydania (PDF lub Excel)
 
-1. W pierwszym polu **wgrywasz**:
-   - Zlecenie transportowe (PDF)
-   - lub Zlecenie wydania (PDF/Excel)  
-2. W drugim polu **wgrywasz**:
-   - WZ (PDF/Excel)
+**2. W drugim polu wgrywasz**  
+- WZ (PDF lub Excel)
 
 **Excel (.xlsx):**  
-- Nagłówek dowolnie wiersz, kolumny dokładnie:
+- Nagłówek może być w dowolnym wierszu.  
+- Kolumny:
   - **EAN**: Symbol, symbol, Kod EAN, kod ean, Kod produktu, GTIN  
   - **Ilość**: Ilość, Ilosc, Quantity, Qty, sztuki, ilość sztuk zamówiona, zamówiona ilość  
-- Usuwa sufiks `.0` i konwertuje `1 638,00` → `1638.00`.
+- Usuwa sufiks `.0` z EAN i konwertuje `1 638,00` → `1638.00`.
 
 **PDF – Zlecenie/Zamówienie:**  
-- Regex: `(ilość) (jm.) (EAN)`.
+- Parsowanie wg wzorca: (ilość) (jm.) (EAN)
 
 **PDF – WZ:**  
-- Znajduje 13-cyfrowy EAN i _pierwszą_ ilość (z przecinkiem) _po_ EAN, pomijając tokeny pasujące do daty.
+- Parsowanie wg wz_pattern: 13-cyfrowy EAN + pełna ilość (`1 578,00`)
 
 **Wynik:**  
-- Tabela: **Symbol**, **Zamówiona_ilość**, **Wydana_ilość**, **Różnica**, **Status**.  
-- Zielone = OK; czerwone = rozbieżności/braki.  
-- „⬇️ Pobierz raport” → Excel.
-""")
+- Tabela: **Symbol**, **Zamówiona_ilość**, **Wydana_ilość**, **Różnica**, **Status**  
+- Zielone wiersze = OK; czerwone = rozbieżności/braki  
+- „⬇️ Pobierz raport” → Excel
+    """)
 
 st.sidebar.header("Krok 1: Zlecenie/Zamówienie")
 up1 = st.sidebar.file_uploader("Wybierz Zlecenie/Zamówienie", type=["xlsx","pdf"], key="order")
@@ -133,25 +128,27 @@ if not up1 or not up2:
     st.info("Proszę wgrać oba pliki.")
     st.stop()
 
-# synonimy dla Excela
+# Synonimy dla Excela
 EAN_SYNS = ["Symbol","symbol","kod ean","ean","kod produktu","gtin"]
 QTY_SYNS = ["Ilość","Ilosc","Quantity","Qty","sztuki","ilość sztuk zamówiona","zamówiona ilość"]
 
-# parsowanie
+# Parsujemy pierwszy plik
 if up1.name.lower().endswith(".xlsx"):
     df1 = parse_excel(up1, EAN_SYNS, QTY_SYNS, "Ilość_Zam")
 else:
     df1 = parse_order_pdf(up1)
 
+# Parsujemy drugi plik
 if up2.name.lower().endswith(".xlsx"):
     df2 = parse_excel(up2, EAN_SYNS, QTY_SYNS, "Ilość_WZ")
 else:
     df2 = parse_wz_pdf(up2)
 
-# grupowanie i porównanie
-g1 = df1.groupby("Symbol", as_index=False).sum().rename(columns={"Ilość_Zam":"Zamówiona_ilość"})
-g2 = df2.groupby("Symbol", as_index=False).sum().rename(columns={"Ilość_WZ":"Wydana_ilość"})
+# ── Grupowanie i porównanie ────────────────────────────────────
+g1 = df1.groupby("Symbol", as_index=False).sum().rename(columns={"Ilość_Zam": "Zamówiona_ilość"})
+g2 = df2.groupby("Symbol", as_index=False).sum().rename(columns={"Ilość_WZ":   "Wydana_ilość"})
 cmp = pd.merge(g1, g2, on="Symbol", how="outer", indicator=True)
+# wypełniamy NaN zerami bez inplace, by uniknąć warningów
 cmp["Zamówiona_ilość"] = cmp["Zamówiona_ilość"].fillna(0)
 cmp["Wydana_ilość"]    = cmp["Wydana_ilość"].fillna(0)
 cmp["Różnica"]         = cmp["Zamówiona_ilość"] - cmp["Wydana_ilość"]
@@ -164,16 +161,20 @@ def status(r):
 cmp["Status"] = cmp.apply(status, axis=1)
 order = ["Różni się","Brak we WZ","Brak w zamówieniu","OK"]
 cmp["Status"] = pd.Categorical(cmp["Status"], categories=order, ordered=True)
-cmp.sort_values(by=["Status","Symbol"], inplace=True)
+cmp.sort_values(["Status","Symbol"], inplace=True)
 
 def highlight_row(row):
-    color = "#c6efce" if row["Status"]=="OK" else "#ffc7ce"
+    color = "#c6efce" if row["Status"] == "OK" else "#ffc7ce"
     return [f"background-color: {color}"] * len(row)
 
 st.markdown("### 📊 Wynik porównania")
 st.dataframe(
     cmp.style
-       .format({"Zamówiona_ilość":"{:.0f}", "Wydana_ilość":"{:.0f}", "Różnica":"{:.0f}"})
+       .format({
+           "Zamówiona_ilość": "{:.0f}",
+           "Wydana_ilość":    "{:.0f}",
+           "Różnica":         "{:.0f}"
+       })
        .apply(highlight_row, axis=1),
     use_container_width=True
 )
@@ -182,10 +183,14 @@ buf = BytesIO()
 with pd.ExcelWriter(buf, engine="openpyxl") as writer:
     cmp.to_excel(writer, index=False, sheet_name="Porównanie")
 
-st.download_button("⬇️ Pobierz raport", data=buf.getvalue(), file_name="raport.xlsx",
-                   mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+st.download_button(
+    "⬇️ Pobierz raport",
+    data=buf.getvalue(),
+    file_name="raport.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+)
 
-if (cmp["Status"]=="OK").all():
+if (cmp["Status"] == "OK").all():
     st.markdown("<h4 style='color:green;'>✅ Pozycje się zgadzają</h4>", unsafe_allow_html=True)
 else:
     st.markdown("<h4 style='color:red;'>❌ Pozycje się nie zgadzają</h4>", unsafe_allow_html=True)
