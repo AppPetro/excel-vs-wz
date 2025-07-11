@@ -54,7 +54,8 @@ def parse_order_pdf(f):
         for page in pdf.pages:
             for line in (page.extract_text() or "").splitlines():
                 m = ORDER_PDF_PATTERN.match(line)
-                if not m: continue
+                if not m: 
+                    continue
                 qty = clean_qty(m.group(1))
                 ean = clean_ean(m.group(2))
                 if qty > 0:
@@ -64,8 +65,8 @@ def parse_order_pdf(f):
 # ── Parsowanie PDF: WZ ───────────────────────────────────────────
 def parse_wz_pdf(f):
     """
-    Wyłuskuje z każdej linii 13-cyfrowy EAN oraz ilość w formacie
-    z separatorem tysięcy i przecinkiem (np. '1 578,00').
+    Z każdej linii PDF wyciąga 13-cyfrowy EAN i dopasowuje
+    w pełnym formacie ilość (np. '1 578,00').
     """
     wz_pattern = re.compile(r"\b(\d{13})\b.*?((?:\d{1,3}\s?)*\d+,\d{2})")
     rows = []
@@ -73,7 +74,8 @@ def parse_wz_pdf(f):
         for page in pdf.pages:
             for line in (page.extract_text() or "").splitlines():
                 m = wz_pattern.search(line)
-                if not m: continue
+                if not m:
+                    continue
                 ean = clean_ean(m.group(1))
                 qty = clean_qty(m.group(2))
                 if qty > 0:
@@ -84,32 +86,33 @@ def parse_wz_pdf(f):
 st.set_page_config(page_title="📋 Porównywarka Zlecenie↔WZ", layout="wide")
 st.title("📋 Porównywarka Zlecenie/Zamówienie vs. WZ")
 
+# Instrukcja od razu dostępna
 with st.expander("ℹ️ Instrukcja obsługi", expanded=True):
     st.markdown("""
-**1. W pierwszym polu wgrywasz:**  
+**1. W pierwszym polu wgrywasz**  
 - Zlecenie transportowe (PDF)  
-- lub Zlecenie wydania (PDF lub Excel)  
+- lub Zlecenie wydania (PDF lub Excel)
 
-**2. W drugim polu wgrywasz:**  
-- WZ (PDF lub Excel)  
+**2. W drugim polu wgrywasz**  
+- WZ (PDF lub Excel)
 
 **Excel (.xlsx):**  
 - Nagłówek może być w dowolnym wierszu.  
-- Kolumny muszą nazywać się jednym z:  
+- Kolumny muszą nazywać się jednym z:
   - **EAN**: Symbol, symbol, Kod EAN, kod ean, Kod produktu, GTIN  
   - **Ilość**: Ilość, Ilosc, Quantity, Qty, sztuki, ilość sztuk zamówiona, zamówiona ilość  
-- Usuwa sufiks `.0` z kodów EAN i konwertuje `1 638,00` → `1638.00`.  
+- Usuwa sufiks `.0` z kodów EAN i konwertuje `1 638,00` → `1638.00`.
 
 **PDF – Zlecenie/Zamówienie:**  
-- Parsuje wzorcem: `(ilość) (jm.) (EAN)`.  
+- Parsuje wzorcem: `(ilość) (jm.) (EAN)`.
 
 **PDF – WZ:**  
-- Parsuje wzorcem: `13-cyfrowy EAN` + odpowiadająca mu ilość w formacie `x xxx,xx`.  
+- Parsuje wz_pattern: `13-cyfrowy EAN` + pełna ilość (`1 578,00`).
 
 **Wynik:**  
 - Tabela: **Symbol**, **Zamówiona_ilość**, **Wydana_ilość**, **Różnica**, **Status**.  
 - Zielone wiersze = OK; czerwone = rozbieżności/braki.  
-- Kliknij „⬇️ Pobierz raport”, by pobrać plik Excel.
+- „⬇️ Pobierz raport” → Excel.
 """)
 
 st.sidebar.header("Krok 1: Zlecenie/Zamówienie")
@@ -121,17 +124,17 @@ if not up1 or not up2:
     st.info("Proszę wgrać oba pliki.")
     st.stop()
 
-# Synonimy kolumn dla Excela
+# synonimy kolumn dla Excela
 EAN_SYNS = ["Symbol","symbol","kod ean","ean","kod produktu","gtin"]
 QTY_SYNS = ["Ilość","Ilosc","Quantity","Qty","sztuki","ilość sztuk zamówiona","zamówiona ilość"]
 
-# Parsowanie pierwszego pliku
+# parsowanie pierwszego pliku
 if up1.name.lower().endswith(".xlsx"):
     df1 = parse_excel(up1, EAN_SYNS, QTY_SYNS, "Ilość_Zam")
 else:
     df1 = parse_order_pdf(up1)
 
-# Parsowanie drugiego pliku
+# parsowanie drugiego pliku
 if up2.name.lower().endswith(".xlsx"):
     df2 = parse_excel(up2, EAN_SYNS, QTY_SYNS, "Ilość_WZ")
 else:
@@ -162,7 +165,7 @@ def highlight_row(r):
 st.markdown("### 📊 Wynik porównania")
 st.dataframe(
     cmp.style
-       .format({"Zamówiona_ilość":"{:.0f}","Wydana_ilość":"{:.0f}","Różnica":"{:.0f}"})
+       .format({"Zamówiona_ilość":"{:.0f}", "Wydana_ilość":"{:.0f}", "Różnica":"{:.0f}"})
        .apply(highlight_row, axis=1),
     use_container_width=True
 )
@@ -175,7 +178,7 @@ st.download_button("⬇️ Pobierz raport", data=buf.getvalue(),
                    file_name="raport.xlsx",
                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-if (cmp["Status"]=="OK").all():
+if (cmp.Status=="OK").all():
     st.markdown("<h4 style='color:green;'>✅ Pozycje się zgadzają</h4>", unsafe_allow_html=True)
 else:
     st.markdown("<h4 style='color:red;'>❌ Pozycje się nie zgadzają</h4>", unsafe_allow_html=True)
