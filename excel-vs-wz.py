@@ -65,7 +65,7 @@ def parse_order_pdf(f):
 def parse_wz_pdf(f):
     rows = []
     # regex na ilość (z przecinkiem) i na formaty dat, aby je pomijać:
-    qty_pattern = re.compile(r"^\d[\d\s]*,\d+$")
+    qty_pattern   = re.compile(r"^\d[\d\s]*,\d+$")
     date_pattern1 = re.compile(r"^\d{4}-\d{2}-\d{2}$")
     date_pattern2 = re.compile(r"^\d{2}[.-]\d{2}[.-]\d{4}$")
     with pdfplumber.open(f) as pdf:
@@ -79,15 +79,26 @@ def parse_wz_pdf(f):
                 # podziel linię na tokeny
                 tokens = re.split(r"\s+", line)
                 # znajdź indeks tokenu zawierającego EAN
-                ean_idx = next((i for i,t in enumerate(tokens) if ean_m.group(1) in t), None)
+                ean_idx = next((i for i, t in enumerate(tokens) if ean_m.group(1) in t), None)
                 if ean_idx is None:
                     continue
-                # szukaj pierwszego tokenu będącego ilością _po_ EAN, pomijając daty
+                # szukaj ilości po EAN, najpierw łącząc ewentualne rozdzielenia tysiąca
                 qty = None
-                for tok in tokens[ean_idx+1:]:
+                for idx in range(ean_idx + 1, len(tokens)):
+                    tok = tokens[idx]
+
+                    # 1) łącz rozdzielone tokeny tysiąca: np. "1" + "002,00" → "1002,00"
+                    if re.match(r"^\d+$", tok) and idx + 1 < len(tokens) and re.match(r"^\d+,\d+$", tokens[idx + 1]):
+                        combined = tok + tokens[idx + 1]
+                        if qty_pattern.match(combined) and not date_pattern1.match(combined) and not date_pattern2.match(combined):
+                            qty = clean_qty(combined)
+                            break
+
+                    # 2) pierwotna logika: pojedynczy token zawierający ilość
                     if qty_pattern.match(tok) and not date_pattern1.match(tok) and not date_pattern2.match(tok):
                         qty = clean_qty(tok)
                         break
+
                 if qty and qty > 0:
                     rows.append([ean, qty])
     return pd.DataFrame(rows, columns=["Symbol", "Ilość_WZ"])
@@ -117,6 +128,7 @@ with st.expander("ℹ️ Instrukcja obsługi", expanded=True):
 
 **PDF – WZ:**  
 - Znajduje 13-cyfrowy EAN i _pierwszą_ ilość (z przecinkiem) _po_ EAN, pomijając tokeny pasujące do daty.
+- Obsługuje też rozdzielone przez split tysiące (np. `"1 002,00"`).
 
 **Wynik:**  
 - Tabela: **Symbol**, **Zamówiona_ilość**, **Wydana_ilość**, **Różnica**, **Status**.  
